@@ -1,4 +1,4 @@
-
+// file: libfftvm.cpp 
 // g++ -fPIC -shared -o libfftvm.so libfftvm.cpp -ltvm_ffi 
 
 #include <vector>
@@ -33,6 +33,9 @@ public:
       } else {
         ret = func_(*t);
       }
+
+      if (t != nullptr) 
+        delete t;
 
       switch (type_) {
         case SOURCE:
@@ -85,5 +88,6 @@ TVM_FFI_STATIC_INIT_BLOCK() {
     }
 
     pipe.run_and_wait_end();
+
   });
 }

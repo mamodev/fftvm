@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel", "apache-tvm-ffi"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fftvm"
+version = "0.1.0"
+dependencies = ["apache-tvm-ffi"]
+authors = [
+  {name = "Marco Morozzi", email = "marco.morozzi2002@gmail.com"},
+]
+description = "This package brings FastFlow power to Python leveraging apache tvm ffi lib!"
+readme = "README.md"
+license = {text = "MIT OR LGPL-3.0-only"}
+requires-python = ">=3.8"
+
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/mamodev/fftvm"
+"Bug Tracker" = "https://github.com/mamodev/fftvm/issues"

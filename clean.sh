@@ -1,0 +1,1 @@
+rm -rf build dist venv_test *.egg-info

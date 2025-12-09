@@ -1,4 +1,4 @@
-__pycache__
-.vscode
-.venv
-3rdparty
+venv_test
+*.egg-info
+build
+dist
