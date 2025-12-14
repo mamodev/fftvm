@@ -1,4 +1,12 @@
+__pycache__
+
+.cache
 venv_test
 *.egg-info
 build
 dist
+3rdparty
+experiments
+.env
+compile_commands.json
+

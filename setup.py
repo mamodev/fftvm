@@ -7,7 +7,7 @@ import tvm_ffi
 print("Building fftvm!!")
 
 FASTFLOW_REPO = "https://github.com/fastflow/fastflow.git"
-FASTFLOW_TAG = "3.0.0"  # Pin a specific tag for stability
+FASTFLOW_TAG = "master"  # Pin a specific tag for stability
 DEPS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "build/_deps"))
 
 
@@ -65,7 +65,7 @@ fftvm_ext = Extension(
     name="fftvm._lib",  # The importable module name
     sources=["src/libfftvm.cpp"],  # Your C++ source
     language="c++",
-    extra_compile_args=["-std=c++17", "-O3", "-fPIC"],
+    extra_compile_args=["-std=c++17", "-O0", "-fPIC"],
 )
 
 setup(

@@ -1,25 +1,48 @@
 // file: libfftvm.cpp 
 // g++ -fPIC -shared -o libfftvm.so libfftvm.cpp -ltvm_ffi 
+#include <cstdint>
+#include <ff/node.hpp>
 #include <iostream>
 #include <cassert>
 #include <memory>
+#include <tvm/ffi/any.h>
+#include <tvm/ffi/function.h>
 #include <utility>
 #include <string>
 #include <vector>
 #include <set>
 
+#include <ff/allocator.hpp>
 #include <ff/ff.hpp>
 
 #include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/container/array.h>
 
 #include <tvm/ffi/error.h>
+
 void tvm_assert(bool cond, std::string msg = "") {
   if (!cond) {
     TVM_FFI_THROW(UndefinedException) << "assertion failed: " << msg; 
   }
 }
 
+static inline tvm::ffi::Any* ff_alloc_any() {
+    void* anyptr_raw = ff::FFAllocator::instance()->malloc(sizeof(tvm::ffi::Any));
+    tvm_assert(anyptr_raw != nullptr, "Out of memory");
+    return static_cast<tvm::ffi::Any*>(anyptr_raw);
+}
+
+static inline tvm::ffi::Any* ff_alloc_any(tvm::ffi::Any&& from) {
+    auto ptr = ff_alloc_any();
+    new (ptr) tvm::ffi::Any(std::move(from));
+    return ptr;
+}
+
+static inline void ff_free_any(tvm::ffi::Any* p) {
+    if (!p) return;
+    p->~Any();
+    ff::FFAllocator::instance()->free(p);
+}
 
 #define FFTVM_DECLARE_OBJECT_INFO(ClassName, BaseClass) \
     static constexpr bool _type_mutable = true; \
@@ -54,11 +77,33 @@ struct ObjectName##_ref : public tvm::ffi::ObjectRef { \
 
 #define FFTVM_REGISTER_METHODS_END()  }
 
-#define NODE(ClassName, ClassBody, MethodRegistrationBlock) \
-    struct ClassName : Node { \
-        ClassBody \
-        FFTVM_DECLARE_NODE_INFO(ClassName); \
-    }; \
+// TODO: FFToken::Key Should no be hardcoded. ff implementation should declare then as constexpr!
+struct FFToken : public tvm::ffi::Object {
+    enum class Key : uintptr_t {
+        EOS           = ULLONG_MAX,
+        EOS_NOFREEZE  = ULLONG_MAX-1,
+        EOSW          = ULLONG_MAX-2,
+        GO_ON         = ULLONG_MAX-3,
+        GO_OUT        = ULLONG_MAX-4,
+        TAG_MIN       = ULLONG_MAX-10
+    };
+
+    Key key;
+    FFToken(Key t) : key(t) {}
+    TVM_FFI_DECLARE_OBJECT_INFO_FINAL("fftvm.FFToken", FFToken, tvm::ffi::Object);
+};
+
+DEFINE_TVM_OBJECT_REF(FFToken);
+FFTVM_REGISTER_METHODS(FFToken);
+SUPPRESS_NO_METHOD_WARNING();
+_reg.def_static("EOS",          [](){ return FFToken_ref(FFToken::Key::EOS); });
+_reg.def_static("EOS_NOFREEZE", [](){ return FFToken_ref(FFToken::Key::EOS_NOFREEZE); });
+_reg.def_static("EOSW",         [](){ return FFToken_ref(FFToken::Key::EOSW); });
+_reg.def_static("GO_ON",        [](){ return FFToken_ref(FFToken::Key::GO_ON); });
+_reg.def_static("GO_OUT",       [](){ return FFToken_ref(FFToken::Key::GO_OUT); });
+_reg.def_static("TAG_MIN",      [](){ return FFToken_ref(FFToken::Key::TAG_MIN); });
+FFTVM_REGISTER_METHODS_END();
+
 
 struct Node : public tvm::ffi::Object {
     using FF_ABC_NODE = ff::ff_node;
@@ -81,6 +126,297 @@ FFTVM_REGISTER_METHODS(Node)
 SUPPRESS_NO_METHOD_WARNING();
 FFTVM_REGISTER_METHODS_END();
 
+
+struct SiSoNode : Node {
+    using Fn        = tvm::ffi::Function;
+    using Any       = tvm::ffi::Any;
+    using ObjectRef = tvm::ffi::ObjectRef;
+
+    struct SiSoNodeImpl : ff::ff_node_t<Any> {
+        SiSoNode* m_self;
+        Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+
+        SiSoNodeImpl(SiSoNode* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
+            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+
+
+        Any* svc(Any* t) override {
+            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            ff_free_any(t);
+
+            if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+
+                Any* tkn = reinterpret_cast<Any *>(r.cast<FFToken_ref>()->key); // [[ UNSAFE ]] this is not a real Any* it is void*
+                return tkn;
+            }
+            
+            return ff_alloc_any(std::move(r));        
+        }
+
+        int svc_init() override {
+            if (m_svc_init.defined()) {
+                auto ret = m_svc_init(m_self);
+                return ret.cast<int>();
+            }
+            return 0;
+        }
+
+        void svc_end() override {
+            if(m_svc_end.defined()) {
+                m_svc_end(m_self);
+            }
+        }
+
+        void eosnotify(ssize_t id)  {
+            if(m_eosnotify.defined()) {
+                m_eosnotify(m_self, id);
+            }
+        }
+    };
+
+    SiSoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
+        Node(SiSoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+
+    SiSoNodeImpl* get() const {
+        return static_cast<SiSoNodeImpl*>(m_object.get());    
+    }
+
+    FFTVM_DECLARE_NODE_INFO(SiSoNode);
+};
+
+
+DEFINE_TVM_OBJECT_REF(SiSoNode);
+FFTVM_REGISTER_METHODS(SiSoNode);
+CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+METHOD("ff_send_out", [](SiSoNode* t, tvm::ffi::Any task) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out(tkn);
+   } else {
+        t->get()->ff_send_out(ff_alloc_any(std::move(task))); 
+   }
+});
+FFTVM_REGISTER_METHODS_END();
+
+struct SiMoNode : Node {
+    using Fn        = tvm::ffi::Function;
+    using Any       = tvm::ffi::Any;
+    using ObjectRef = tvm::ffi::ObjectRef;
+
+    struct SiMoNodeImpl : ff::ff_monode_t<Any> {
+        Node* m_self;
+        Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+
+        SiMoNodeImpl(Node* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
+            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+
+        Any* svc(Any* t) override {
+            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            ff_free_any(t);
+
+            if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+
+                Any* tkn = reinterpret_cast<Any *>(r.cast<FFToken_ref>()->key); // [[ UNSAFE ]] this is not a real Any* it is void*
+                return tkn;
+            }
+            
+            return ff_alloc_any(std::move(r));        
+        }
+
+        int svc_init() override {
+            if (m_svc_init.defined()) {
+                auto ret = m_svc_init(m_self);
+                return ret.cast<int>();
+            }
+            return 0;
+        }
+
+        void svc_end() override {
+            if(m_svc_end.defined()) {
+                m_svc_end(m_self);
+            }
+        }
+
+
+        void eosnotify(ssize_t id)  {
+            if(m_eosnotify.defined()) {
+                m_eosnotify(m_self);
+            }
+        }
+    };
+
+    SiMoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
+        Node(SiMoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+
+    SiMoNodeImpl* get() const {
+        return static_cast<SiMoNodeImpl*>(m_object.get());    
+    }
+
+    FFTVM_DECLARE_NODE_INFO(SiMoNode);
+};
+
+
+DEFINE_TVM_OBJECT_REF(SiMoNode);
+FFTVM_REGISTER_METHODS(SiMoNode);
+CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+METHOD("ff_send_out", [](SiMoNode* t, tvm::ffi::Any task) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out(tkn);
+   } else {
+        t->get()->ff_send_out(ff_alloc_any(std::move(task))); 
+   }
+});
+
+
+METHOD("ff_send_out_to", [](SiMoNode* t, tvm::ffi::Any task, int id) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out_to(tkn, id);
+   } else {
+        t->get()->ff_send_out_to(ff_alloc_any(std::move(task)), id); 
+   }
+});
+FFTVM_REGISTER_METHODS_END();
+
+
+
+struct MiSoNode : Node {
+    using Fn        = tvm::ffi::Function;
+    using Any       = tvm::ffi::Any;
+    using ObjectRef = tvm::ffi::ObjectRef;
+
+    struct MiSoNodeImpl : ff::ff_minode_t<Any> {
+        MiSoNode* m_self;
+        Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+
+        MiSoNodeImpl(MiSoNode* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify):
+            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+
+
+        Any* svc(Any* t) override {
+            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            ff_free_any(t);
+
+            if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+
+                Any* tkn = reinterpret_cast<Any *>(r.cast<FFToken_ref>()->key); // [[ UNSAFE ]] this is not a real Any* it is void*
+                return tkn;
+            }
+            
+            return ff_alloc_any(std::move(r));        
+        }
+
+        int svc_init() override {
+            if (m_svc_init.defined()) {
+                auto ret = m_svc_init(m_self);
+                return ret.cast<int>();
+            }
+            return 0;
+        }
+
+        void svc_end() override {
+            if(m_svc_end.defined()) {
+                m_svc_end(m_self);
+            }
+        }
+
+        void eosnotify(ssize_t id)  {
+            if(m_eosnotify.defined()) {
+                m_eosnotify(m_self, id);
+            }
+        }
+    };
+
+    MiSoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
+        Node(MiSoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+
+    MiSoNodeImpl* get() const {
+        return static_cast<MiSoNodeImpl*>(m_object.get());    
+    }
+
+    FFTVM_DECLARE_NODE_INFO(MiSoNode);
+};
+
+
+DEFINE_TVM_OBJECT_REF(MiSoNode);
+FFTVM_REGISTER_METHODS(MiSoNode);
+CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+METHOD("ff_send_out", [](MiSoNode* t, tvm::ffi::Any task) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out(tkn);
+   } else {
+        t->get()->ff_send_out(ff_alloc_any(std::move(task))); 
+   }
+});
+FFTVM_REGISTER_METHODS_END();
+
+
+struct MiMoNode : Node {
+    using Fn        = tvm::ffi::Function;
+    using Any       = tvm::ffi::Any;
+    using ObjectRef = tvm::ffi::ObjectRef;
+
+    struct MiNodeForwarder : ff::ff_minode_t<Any> {
+        Any* svc(Any* t) override {
+            return t;
+        }
+    };
+
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wreorder"
+    struct MiMoNodeImpl : public ff::ff_comb {
+
+        using ff::ff_comb::ff_send_out; 
+        using ff::ff_comb::ff_send_out_to;
+
+        std::unique_ptr<MiNodeForwarder> in;
+        std::unique_ptr<SiMoNode::SiMoNodeImpl> out;
+
+        template <typename... Args>
+        MiMoNodeImpl(Args&&... args) : 
+            in(std::make_unique<MiNodeForwarder>()), 
+            out(std::make_unique<SiMoNode::SiMoNodeImpl>(std::forward<Args>(args)...)),
+            ff::ff_comb(in.get(), out.get()) {}
+    };
+    #pragma GCC diagnostic pop
+
+    MiMoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) : 
+        Node(MiMoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+
+
+    MiMoNodeImpl* get() const {
+        return static_cast<MiMoNodeImpl*>(m_object.get());    
+    }
+
+    FFTVM_DECLARE_NODE_INFO(MiMoNode);
+};
+
+
+DEFINE_TVM_OBJECT_REF(MiMoNode);
+FFTVM_REGISTER_METHODS(MiMoNode);
+CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function,  tvm::ffi::Function)
+METHOD("ff_send_out", [](MiMoNode* t, tvm::ffi::Any task) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out(tkn);
+   } else {
+        t->get()->ff_send_out(ff_alloc_any(std::move(task))); 
+   }
+});
+
+METHOD("ff_send_out_to", [](MiMoNode* t, tvm::ffi::Any task, int id) {
+    if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
+        void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
+        t->get()->ff_send_out_to(tkn, id);
+   } else {
+        t->get()->ff_send_out_to(ff_alloc_any(std::move(task)), id); 
+   }
+});
+FFTVM_REGISTER_METHODS_END();
+
+
 struct Source : Node {
     struct source_impl : ff::ff_node_t<tvm::ffi::Any> {
         tvm::ffi::Function m_fn;
@@ -93,7 +429,7 @@ struct Source : Node {
                 if (ret.type_index() == TVMFFITypeIndex::kTVMFFINone)
                     break;
 
-                ff_send_out(new tvm::ffi::Any(std::move(ret)));
+                ff_send_out(ff_alloc_any(std::move(ret)));
             }
 
             return EOS;
@@ -116,6 +452,8 @@ struct Sink : Node {
         tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
             tvm_assert(t != nullptr, "sink nodes should always be called with input task!");
             m_fn(*t);
+            ff_free_any(t);
+
             return GO_ON;
         }
     };
@@ -130,7 +468,6 @@ FFTVM_REGISTER_METHODS(Sink)
     CONSTRUCTOR(tvm::ffi::Function);
 FFTVM_REGISTER_METHODS_END();
 
-
 struct Processor : Node {
     struct processor_impl : ff::ff_node_t<tvm::ffi::Any> {
         tvm::ffi::Function m_fn;
@@ -138,10 +475,10 @@ struct Processor : Node {
         tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
             tvm_assert(t != nullptr, "processor node should always be called with input task!");
             auto ret = m_fn(*t);
-            delete t;
-
-            return new tvm::ffi::Any(std::move(ret));
+            ff_free_any(t);
+            return ff_alloc_any(std::move(ret));
         }
+
     };
 
     Processor(tvm::ffi::Function fn) : Node(processor_impl(fn)) {}
@@ -187,6 +524,11 @@ FFTVM_REGISTER_METHODS(Pipeline)
         t->get()->run_and_wait_end();
     })
 
+    // METHOD("wrap_around", [](Pipeline* f) {
+    //     tvm_assert(t->get()->wrap_around() == 0, "error while calling ff_pipeline::wrap_around");
+    //     return f;
+    // })
+
 FFTVM_REGISTER_METHODS_END()
 
 struct Farm : Node {
@@ -230,10 +572,32 @@ FFTVM_REGISTER_METHODS(Farm)
             f->get()->add_collector(nullptr);
             return f;
         }
+
         f->get()->add_collector(copt.value()->m_object.get());
         f->m_owned_deps.emplace_back(copt.value());
         return f;
     })
+
+    METHOD("add_emitter", [](Farm* f, tvm::ffi::Optional<Node_ref> eopt) {
+        if (!eopt.has_value()) {
+            f->get()->add_collector(nullptr);
+            return f;
+        }
+
+        f->get()->add_emitter(eopt.value()->m_object.get());
+        f->m_owned_deps.emplace_back(eopt.value());
+        return f;
+    })
+
+    METHOD("wrap_around", [](Farm* f) {
+        tvm_assert(f->get()->wrap_around() == 0, "error while calling ff_farm::wrap_around");
+        return f;
+    })
+
+    METHOD("run_and_wait_end", [](Farm* t) {
+        t->get()->run_and_wait_end();
+    })
+
     
     METHOD("debug_info", [](Farm* f) {
         std::cout << "FarmNode debug infos:" << std::endl;
@@ -307,6 +671,10 @@ CONSTRUCTOR()
         t->get()->add_secondset(std::vector<ff::ff_node *>(ptr_set.begin(), ptr_set.end()));
 
         return t;
+    })
+
+    METHOD("run_and_wait_end", [](A2A* t) {
+        t->get()->run_and_wait_end();
     })
 
     METHOD("debug_info", [](A2A* t) {
