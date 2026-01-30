@@ -57,11 +57,20 @@ class _baseNodeMixin:
                 assert(not svc_end)
                 cls = type(self)
 
-                svc         = _baseNodeMixin._create_safe_wrapper(self, cls.svc)
-                svc_init    = _baseNodeMixin._create_safe_wrapper(self, cls.svc_init) if hasattr(self, 'svc_init') else None
-                svc_end     = _baseNodeMixin._create_safe_wrapper(self, cls.svc_end) if hasattr(self, 'svc_end') else None
-                eosnotify     = _baseNodeMixin._create_safe_wrapper(self, cls.eosnotify) if hasattr(self, 'eosnotify') else None
 
+                def get_val(attr_name):
+                    if not hasattr(cls, attr_name):
+                        return None
+                    val = getattr(cls, attr_name)
+                    # Logic: If it's a native FFI function, use it directly; otherwise, wrap it.
+                    if type(val) == tvm_ffi.core.Function:
+                        return val
+                    return _baseNodeMixin._create_safe_wrapper(self, val)
+
+                svc       = get_val('svc')
+                svc_init  = get_val('svc_init')
+                svc_end   = get_val('svc_end')
+                eosnotify = get_val('eosnotify')
 
             self.__ffi_init__(svc, svc_init, svc_end, eosnotify)
 
@@ -108,19 +117,19 @@ class A2A(tvm_ffi.Object):
         self.__ffi_init__()
 
 
-@tvm_ffi.register_object("fftvm.Sink")
-class Sink(tvm_ffi.Object):
-    def __init__(self, fn):
-        self.__ffi_init__(fn)
+# @tvm_ffi.register_object("fftvm.Sink")
+# class Sink(tvm_ffi.Object):
+#     def __init__(self, fn):
+#         self.__ffi_init__(fn)
 
 
-@tvm_ffi.register_object("fftvm.Processor")
-class Processor(tvm_ffi.Object):
-    def __init__(self, fn):
-        self.__ffi_init__(fn)
+# @tvm_ffi.register_object("fftvm.Processor")
+# class Processor(tvm_ffi.Object):
+#     def __init__(self, fn):
+#         self.__ffi_init__(fn)
 
 
-@tvm_ffi.register_object("fftvm.Source")
-class Source(tvm_ffi.Object):
-    def __init__(self, fn):
-        self.__ffi_init__(fn)
+# @tvm_ffi.register_object("fftvm.Source")
+# class Source(tvm_ffi.Object):
+#     def __init__(self, fn):
+#         self.__ffi_init__(fn)

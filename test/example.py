@@ -14,6 +14,8 @@ native_mod = tvm_ffi.cpp.load_inline(
 
 print(f"Loaded libfftvm: {fftvm.__libfftvm}")
 
+print(type(native_mod['pow']) == tvm_ffi.core.Function)
+
 
 def source():
     if not hasattr(source, "count"):

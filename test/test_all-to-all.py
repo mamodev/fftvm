@@ -15,6 +15,7 @@ NTasks = 1000
 NodesPerStage = 3
 Total = 0
 
+
 class FirstStage(ff.SiSoNode):
     def __init__(self):
         super().__init__()

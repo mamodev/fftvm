@@ -94,6 +94,8 @@ struct FFToken : public tvm::ffi::Object {
 };
 
 DEFINE_TVM_OBJECT_REF(FFToken);
+
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(FFToken);
 SUPPRESS_NO_METHOD_WARNING();
 _reg.def_static("EOS",          [](){ return FFToken_ref(FFToken::Key::EOS); });
@@ -103,7 +105,7 @@ _reg.def_static("GO_ON",        [](){ return FFToken_ref(FFToken::Key::GO_ON); }
 _reg.def_static("GO_OUT",       [](){ return FFToken_ref(FFToken::Key::GO_OUT); });
 _reg.def_static("TAG_MIN",      [](){ return FFToken_ref(FFToken::Key::TAG_MIN); });
 FFTVM_REGISTER_METHODS_END();
-
+#endif
 
 struct Node : public tvm::ffi::Object {
     using FF_ABC_NODE = ff::ff_node;
@@ -122,9 +124,12 @@ struct Node : public tvm::ffi::Object {
     FFTVM_DECLARE_OBJECT_INFO(Node, tvm::ffi::Object);
 };
 DEFINE_TVM_OBJECT_REF(Node)
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(Node)
 SUPPRESS_NO_METHOD_WARNING();
 FFTVM_REGISTER_METHODS_END();
+#endif
+
 
 
 struct SiSoNode : Node {
@@ -186,6 +191,7 @@ struct SiSoNode : Node {
 
 
 DEFINE_TVM_OBJECT_REF(SiSoNode);
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(SiSoNode);
 CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](SiSoNode* t, tvm::ffi::Any task) {
@@ -197,6 +203,8 @@ METHOD("ff_send_out", [](SiSoNode* t, tvm::ffi::Any task) {
    }
 });
 FFTVM_REGISTER_METHODS_END();
+#endif
+
 
 struct SiMoNode : Node {
     using Fn        = tvm::ffi::Function;
@@ -257,6 +265,7 @@ struct SiMoNode : Node {
 
 
 DEFINE_TVM_OBJECT_REF(SiMoNode);
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(SiMoNode);
 CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](SiMoNode* t, tvm::ffi::Any task) {
@@ -278,7 +287,7 @@ METHOD("ff_send_out_to", [](SiMoNode* t, tvm::ffi::Any task, int id) {
    }
 });
 FFTVM_REGISTER_METHODS_END();
-
+#endif
 
 
 struct MiSoNode : Node {
@@ -340,6 +349,8 @@ struct MiSoNode : Node {
 
 
 DEFINE_TVM_OBJECT_REF(MiSoNode);
+
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(MiSoNode);
 CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](MiSoNode* t, tvm::ffi::Any task) {
@@ -351,6 +362,8 @@ METHOD("ff_send_out", [](MiSoNode* t, tvm::ffi::Any task) {
    }
 });
 FFTVM_REGISTER_METHODS_END();
+#endif
+
 
 
 struct MiMoNode : Node {
@@ -395,6 +408,7 @@ struct MiMoNode : Node {
 
 
 DEFINE_TVM_OBJECT_REF(MiMoNode);
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(MiMoNode);
 CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function,  tvm::ffi::Function)
 METHOD("ff_send_out", [](MiMoNode* t, tvm::ffi::Any task) {
@@ -415,79 +429,8 @@ METHOD("ff_send_out_to", [](MiMoNode* t, tvm::ffi::Any task, int id) {
    }
 });
 FFTVM_REGISTER_METHODS_END();
+#endif
 
-
-struct Source : Node {
-    struct source_impl : ff::ff_node_t<tvm::ffi::Any> {
-        tvm::ffi::Function m_fn;
-        source_impl(tvm::ffi::Function fn) : m_fn(fn) {}
-        tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
-            tvm_assert(t == nullptr, "sources should not have input tasks");
-            tvm::ffi::Any ret;
-            while (true) {
-                ret = m_fn();
-                if (ret.type_index() == TVMFFITypeIndex::kTVMFFINone)
-                    break;
-
-                ff_send_out(ff_alloc_any(std::move(ret)));
-            }
-
-            return EOS;
-        }
-    };
-
-    Source(tvm::ffi::Function fn) : Node(source_impl(fn)) {}
-    FFTVM_DECLARE_NODE_INFO(Source);
-};
-
-DEFINE_TVM_OBJECT_REF(Source)
-FFTVM_REGISTER_METHODS(Source)
-    CONSTRUCTOR(tvm::ffi::Function);
-FFTVM_REGISTER_METHODS_END();
-
-struct Sink : Node {
-    struct sink_impl : ff::ff_node_t<tvm::ffi::Any> {
-        tvm::ffi::Function m_fn;
-        sink_impl(tvm::ffi::Function fn) : m_fn(fn) {}
-        tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
-            tvm_assert(t != nullptr, "sink nodes should always be called with input task!");
-            m_fn(*t);
-            ff_free_any(t);
-
-            return GO_ON;
-        }
-    };
-
-    Sink(tvm::ffi::Function fn) : Node(sink_impl(fn)) {}
-
-    FFTVM_DECLARE_NODE_INFO(Sink);
-};
-
-DEFINE_TVM_OBJECT_REF(Sink)
-FFTVM_REGISTER_METHODS(Sink)
-    CONSTRUCTOR(tvm::ffi::Function);
-FFTVM_REGISTER_METHODS_END();
-
-struct Processor : Node {
-    struct processor_impl : ff::ff_node_t<tvm::ffi::Any> {
-        tvm::ffi::Function m_fn;
-        processor_impl(tvm::ffi::Function fn) : m_fn(fn) {}
-        tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
-            tvm_assert(t != nullptr, "processor node should always be called with input task!");
-            auto ret = m_fn(*t);
-            ff_free_any(t);
-            return ff_alloc_any(std::move(ret));
-        }
-
-    };
-
-    Processor(tvm::ffi::Function fn) : Node(processor_impl(fn)) {}
-    FFTVM_DECLARE_NODE_INFO(Processor);
-};
-
-FFTVM_REGISTER_METHODS(Processor)
-    CONSTRUCTOR(tvm::ffi::Function);
-FFTVM_REGISTER_METHODS_END();
 
 
 struct Pipeline : Node {
@@ -503,6 +446,8 @@ struct Pipeline : Node {
 };
 
 DEFINE_TVM_OBJECT_REF(Pipeline)
+
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(Pipeline)
     CONSTRUCTOR();
 
@@ -530,6 +475,8 @@ FFTVM_REGISTER_METHODS(Pipeline)
     // })
 
 FFTVM_REGISTER_METHODS_END()
+#endif
+
 
 struct Farm : Node {
     Farm() : Node(ff::ff_farm()) {}
@@ -545,6 +492,8 @@ struct Farm : Node {
 };
 
 DEFINE_TVM_OBJECT_REF(Farm)
+
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(Farm)
     CONSTRUCTOR()
     METHOD("add_workers", [](Farm* f, tvm::ffi::Array<Node_ref> w) {
@@ -611,6 +560,7 @@ FFTVM_REGISTER_METHODS(Farm)
         return f;
     });
 FFTVM_REGISTER_METHODS_END()
+#endif
 
 struct A2A : Node {
     A2A() : Node(ff::ff_a2a()) {}
@@ -626,6 +576,7 @@ struct A2A : Node {
 
 
 DEFINE_TVM_OBJECT_REF(A2A)
+#ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(A2A)
 CONSTRUCTOR()
     METHOD("add_firstset", [](A2A* t, tvm::ffi::Array<Node_ref> w){
@@ -692,4 +643,78 @@ CONSTRUCTOR()
         return t;
     })
 FFTVM_REGISTER_METHODS_END()
+#endif
 
+
+// === deprecated 
+// struct Source : Node {
+//     struct source_impl : ff::ff_node_t<tvm::ffi::Any> {
+//         tvm::ffi::Function m_fn;
+//         source_impl(tvm::ffi::Function fn) : m_fn(fn) {}
+//         tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
+//             tvm_assert(t == nullptr, "sources should not have input tasks");
+//             tvm::ffi::Any ret;
+//             while (true) {
+//                 ret = m_fn();
+//                 if (ret.type_index() == TVMFFITypeIndex::kTVMFFINone)
+//                     break;
+
+//                 ff_send_out(ff_alloc_any(std::move(ret)));
+//             }
+
+//             return EOS;
+//         }
+//     };
+
+//     Source(tvm::ffi::Function fn) : Node(source_impl(fn)) {}
+//     FFTVM_DECLARE_NODE_INFO(Source);
+// };
+
+// DEFINE_TVM_OBJECT_REF(Source)
+// FFTVM_REGISTER_METHODS(Source)
+//     CONSTRUCTOR(tvm::ffi::Function);
+// FFTVM_REGISTER_METHODS_END();
+
+// struct Sink : Node {
+//     struct sink_impl : ff::ff_node_t<tvm::ffi::Any> {
+//         tvm::ffi::Function m_fn;
+//         sink_impl(tvm::ffi::Function fn) : m_fn(fn) {}
+//         tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
+//             tvm_assert(t != nullptr, "sink nodes should always be called with input task!");
+//             m_fn(*t);
+//             ff_free_any(t);
+
+//             return GO_ON;
+//         }
+//     };
+
+//     Sink(tvm::ffi::Function fn) : Node(sink_impl(fn)) {}
+
+//     FFTVM_DECLARE_NODE_INFO(Sink);
+// };
+
+// DEFINE_TVM_OBJECT_REF(Sink)
+// FFTVM_REGISTER_METHODS(Sink)
+//     CONSTRUCTOR(tvm::ffi::Function);
+// FFTVM_REGISTER_METHODS_END();
+
+// struct Processor : Node {
+//     struct processor_impl : ff::ff_node_t<tvm::ffi::Any> {
+//         tvm::ffi::Function m_fn;
+//         processor_impl(tvm::ffi::Function fn) : m_fn(fn) {}
+//         tvm::ffi::Any* svc (tvm::ffi::Any* t) override {
+//             tvm_assert(t != nullptr, "processor node should always be called with input task!");
+//             auto ret = m_fn(*t);
+//             ff_free_any(t);
+//             return ff_alloc_any(std::move(ret));
+//         }
+
+//     };
+
+//     Processor(tvm::ffi::Function fn) : Node(processor_impl(fn)) {}
+//     FFTVM_DECLARE_NODE_INFO(Processor);
+// };
+
+// FFTVM_REGISTER_METHODS(Processor)
+//     CONSTRUCTOR(tvm::ffi::Function);
+// FFTVM_REGISTER_METHODS_END();
