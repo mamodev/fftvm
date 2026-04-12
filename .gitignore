@@ -1,12 +1,15 @@
 __pycache__
 
+3rdparty
+/venv_test/
+.env
+.gemini
+
+.venv
 .cache
 venv_test
 *.egg-info
 build
 dist
-3rdparty
-experiments
-.env
+# experiments
 compile_commands.json
-

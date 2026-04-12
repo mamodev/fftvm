@@ -239,19 +239,20 @@ echo "export CPLUS_INCLUDE_PATH=\$TVM_HOME/3rdparty/dmlc-core/include:\$CPLUS_IN
 # TVM python requirements
 # =============================
 
-if [ ! -f "$SCRIPT_DIR/requirements.tvm.txt" ] || [ "$REBUILD_TVM" = true ]; then
-    cd "$TVM_FOLDER"/python
-    python3 gen_requirements.py
-    mv requirements/core.txt $SCRIPT_DIR/requirements.tvm.txt
-    rm -r requirements
+# NOT usefull anymore?
+# if [ ! -f "$SCRIPT_DIR/requirements.tvm.txt" ] || [ "$REBUILD_TVM" = true ]; then
+#     cd "$TVM_FOLDER"/python
+#     python3 gen_requirements.py
+#     mv requirements/core.txt $SCRIPT_DIR/requirements.tvm.txt
+#     rm -r requirements
 
-    echo "tvm requirements generated at $SCRIPT_DIR/requirements.tvm.txt"
-    echo "Installing tvm requirements in the virtual environment..."
-    pip install -r "$SCRIPT_DIR/requirements.tvm.txt"
-    echo "tvm requirements installation complete."
-else
-    echo "tvm core requirements are up to date."
-fi
+#     echo "tvm requirements generated at $SCRIPT_DIR/requirements.tvm.txt"
+#     echo "Installing tvm requirements in the virtual environment..."
+#     pip install -r "$SCRIPT_DIR/requirements.tvm.txt"
+#     echo "tvm requirements installation complete."
+# else
+#     echo "tvm core requirements are up to date."
+# fi
 
 # =============================
 # FastFlow setup

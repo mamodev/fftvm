@@ -49,10 +49,27 @@ class _baseNodeMixin:
             return lambda _, *args: method(instance, *args)
         
     def __init__(self, svc=None, svc_init=None, svc_end=None, eosnotify=None):
+            svc_num_args = 0
+            if svc is not None:
+                # If svc is passed directly, check its signature
+                if type(svc) == tvm_ffi.core.Function:
+                    svc_num_args = 1
+                else:
+                    sig = inspect.signature(svc)
+                    params = list(sig.parameters.values())
+                    # If it's a bound method or has 'self', we might need 2, but 
+                    # usually passed svc in init is a free function or bound method that takes 1 task.
+                    # FastFlow SiSoNode expects 1 task.
+                    # If we wrap it, _create_safe_wrapper handles the (instance, *args).
+                    # For simplicity, if passed in init, we assume it's 1-arg task.
+                    svc_num_args = 1
+                    # But if we need the wrapper, we should use it.
+                    # Actually, __ffi_init__ takes the function directly.
+
             if svc is None:
                 if not hasattr(self, 'svc'):
                     raise ValueError("When subclassing SiSoNode, you must define a 'svc' method.")
-                
+
                 assert(not svc_init)
                 assert(not svc_end)
                 cls = type(self)
@@ -72,8 +89,21 @@ class _baseNodeMixin:
                 svc_end   = get_val('svc_end')
                 eosnotify = get_val('eosnotify')
 
-            self.__ffi_init__(svc, svc_init, svc_end, eosnotify)
+                # Calculate svc_num_args
+                svc_num_args = 0
+                if svc is not None:
+                    if type(svc) == tvm_ffi.core.Function:
+                        svc_num_args = 1 
+                    else:
+                        # It is a wrapped python function
+                        sig = inspect.signature(getattr(cls, 'svc'))
+                        params = list(sig.parameters.values())
+                        if len(params) > 0 and params[0].name == 'self':
+                            svc_num_args = 2
+                        else:
+                            svc_num_args = 1
 
+            self.__ffi_init__(svc, svc_num_args, svc_init, svc_end, eosnotify)
 @tvm_ffi.register_object("fftvm.SiSoNode")
 class SiSoNode(_baseNodeMixin, tvm_ffi.Object):
     def __init__(self, svc=None, svc_init=None, svc_end=None, eosnotify=None):

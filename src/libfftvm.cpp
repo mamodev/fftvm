@@ -140,13 +140,19 @@ struct SiSoNode : Node {
     struct SiSoNodeImpl : ff::ff_node_t<Any> {
         SiSoNode* m_self;
         Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+        int m_svc_num_args;
 
-        SiSoNodeImpl(SiSoNode* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
-            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+        SiSoNodeImpl(SiSoNode* self, Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) :
+            m_self(self), m_svc(svc), m_svc_num_args(svc_num_args), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
 
 
         Any* svc(Any* t) override {
-            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            Any r;
+            if (m_svc_num_args == 1) {
+                r = m_svc(t != nullptr ? *t : Any());
+            } else {
+                r = m_svc(m_self, t != nullptr ? *t : Any());
+            }
             ff_free_any(t);
 
             if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
@@ -179,8 +185,9 @@ struct SiSoNode : Node {
         }
     };
 
-    SiSoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
-        Node(SiSoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+    SiSoNode(Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) : Node(tvm::ffi::UnsafeInit{}) {
+        m_object = std::make_unique<SiSoNodeImpl>(this, svc, svc_num_args, svc_init, svc_end, eosnotify);
+    }
 
     SiSoNodeImpl* get() const {
         return static_cast<SiSoNodeImpl*>(m_object.get());    
@@ -193,7 +200,7 @@ struct SiSoNode : Node {
 DEFINE_TVM_OBJECT_REF(SiSoNode);
 #ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(SiSoNode);
-CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+CONSTRUCTOR(tvm::ffi::Function, int, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](SiSoNode* t, tvm::ffi::Any task) {
     if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
         void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
@@ -214,12 +221,18 @@ struct SiMoNode : Node {
     struct SiMoNodeImpl : ff::ff_monode_t<Any> {
         Node* m_self;
         Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+        int m_svc_num_args;
 
-        SiMoNodeImpl(Node* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
-            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+        SiMoNodeImpl(Node* self, Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) :
+            m_self(self), m_svc(svc), m_svc_num_args(svc_num_args), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
 
         Any* svc(Any* t) override {
-            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            Any r;
+            if (m_svc_num_args == 1) {
+                r = m_svc(t != nullptr ? *t : Any());
+            } else {
+                r = m_svc(m_self, t != nullptr ? *t : Any());
+            }
             ff_free_any(t);
 
             if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
@@ -253,8 +266,9 @@ struct SiMoNode : Node {
         }
     };
 
-    SiMoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
-        Node(SiMoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+    SiMoNode(Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) : Node(tvm::ffi::UnsafeInit{}) {
+        m_object = std::make_unique<SiMoNodeImpl>(this, svc, svc_num_args, svc_init, svc_end, eosnotify);
+    }
 
     SiMoNodeImpl* get() const {
         return static_cast<SiMoNodeImpl*>(m_object.get());    
@@ -267,7 +281,7 @@ struct SiMoNode : Node {
 DEFINE_TVM_OBJECT_REF(SiMoNode);
 #ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(SiMoNode);
-CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+CONSTRUCTOR(tvm::ffi::Function, int, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](SiMoNode* t, tvm::ffi::Any task) {
     if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
         void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
@@ -298,13 +312,19 @@ struct MiSoNode : Node {
     struct MiSoNodeImpl : ff::ff_minode_t<Any> {
         MiSoNode* m_self;
         Fn m_svc, m_svc_init, m_svc_end, m_eosnotify;
+        int m_svc_num_args;
 
-        MiSoNodeImpl(MiSoNode* self, Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify):
-            m_self(self), m_svc(svc), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
+        MiSoNodeImpl(MiSoNode* self, Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify):
+            m_self(self), m_svc(svc), m_svc_num_args(svc_num_args), m_svc_init(svc_init), m_svc_end(svc_end), m_eosnotify(eosnotify) {}
 
 
         Any* svc(Any* t) override {
-            auto r = m_svc(m_self, t != nullptr ? *t : Any());
+            Any r;
+            if (m_svc_num_args == 1) {
+                r = m_svc(t != nullptr ? *t : Any());
+            } else {
+                r = m_svc(m_self, t != nullptr ? *t : Any());
+            }
             ff_free_any(t);
 
             if (r.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
@@ -337,8 +357,9 @@ struct MiSoNode : Node {
         }
     };
 
-    MiSoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) :
-        Node(MiSoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
+    MiSoNode(Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) : Node(tvm::ffi::UnsafeInit{}) {
+        m_object = std::make_unique<MiSoNodeImpl>(this, svc, svc_num_args, svc_init, svc_end, eosnotify);
+    }
 
     MiSoNodeImpl* get() const {
         return static_cast<MiSoNodeImpl*>(m_object.get());    
@@ -352,7 +373,7 @@ DEFINE_TVM_OBJECT_REF(MiSoNode);
 
 #ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(MiSoNode);
-CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
+CONSTRUCTOR(tvm::ffi::Function, int, tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](MiSoNode* t, tvm::ffi::Any task) {
     if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
         void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
@@ -377,27 +398,30 @@ struct MiMoNode : Node {
         }
     };
 
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wreorder"
-    struct MiMoNodeImpl : public ff::ff_comb {
+    struct MiMoNodeInternal {
+        MiNodeForwarder m_in;
+        SiMoNode::SiMoNodeImpl m_out;
+
+        template <typename... Args>
+        MiMoNodeInternal(Args&&... args) : 
+            m_in(), 
+            m_out(std::forward<Args>(args)...) {}
+    };
+
+    struct MiMoNodeImpl : private MiMoNodeInternal, public ff::ff_comb {
 
         using ff::ff_comb::ff_send_out; 
         using ff::ff_comb::ff_send_out_to;
 
-        std::unique_ptr<MiNodeForwarder> in;
-        std::unique_ptr<SiMoNode::SiMoNodeImpl> out;
-
         template <typename... Args>
         MiMoNodeImpl(Args&&... args) : 
-            in(std::make_unique<MiNodeForwarder>()), 
-            out(std::make_unique<SiMoNode::SiMoNodeImpl>(std::forward<Args>(args)...)),
-            ff::ff_comb(in.get(), out.get()) {}
+            MiMoNodeInternal(std::forward<Args>(args)...),
+            ff::ff_comb(&this->m_in, &this->m_out) {}
     };
-    #pragma GCC diagnostic pop
 
-    MiMoNode(Fn svc, Fn svc_init, Fn svc_end, Fn eosnotify) : 
-        Node(MiMoNodeImpl(this, svc, svc_init, svc_end, eosnotify)) {}
-
+    MiMoNode(Fn svc, int svc_num_args, Fn svc_init, Fn svc_end, Fn eosnotify) : Node(tvm::ffi::UnsafeInit{}) {
+        m_object = std::make_unique<MiMoNodeImpl>(this, svc, svc_num_args, svc_init, svc_end, eosnotify);
+    }
 
     MiMoNodeImpl* get() const {
         return static_cast<MiMoNodeImpl*>(m_object.get());    
@@ -410,7 +434,7 @@ struct MiMoNode : Node {
 DEFINE_TVM_OBJECT_REF(MiMoNode);
 #ifdef FFTVM_IMPL
 FFTVM_REGISTER_METHODS(MiMoNode);
-CONSTRUCTOR(tvm::ffi::Function, tvm::ffi::Function, tvm::ffi::Function,  tvm::ffi::Function)
+CONSTRUCTOR(tvm::ffi::Function, int, tvm::ffi::Function,  tvm::ffi::Function, tvm::ffi::Function)
 METHOD("ff_send_out", [](MiMoNode* t, tvm::ffi::Any task) {
     if (task.type_index() == FFToken::_GetOrAllocRuntimeTypeIndex()) {
         void* tkn = reinterpret_cast<void *>(task.cast<FFToken_ref>()->key);
