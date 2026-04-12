@@ -2,6 +2,11 @@
 
 FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It provides a Python-friendly API to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
 
+## External Documentation
+For a deeper understanding of the underlying frameworks, please refer to:
+- **FastFlow**: [FastFlow GitHub & Wiki](https://github.com/fastflow/fastflow)
+- **Apache TVM FFI**: [TVM FFI Documentation](https://tvm.apache.org/docs/arch/index.html) (Core FFI and Object System)
+
 ## Project Context: DARE (Research Project)
 This library was developed as part of the **DARE project** to explore the integration of stream-oriented parallelism within the TVM ecosystem. The core objective is to bridge **FastFlow** and **TVM’s FFI ABI**, enabling the construction of asynchronous inference pipelines where throughput is optimized through the coordination of heterogeneous stages.
 
@@ -56,37 +61,28 @@ If you are contributing to the FFTVM core or want to build from source:
 
 ---
 
-## 2. Testing
-
-FFTVM uses a structured testing approach to ensure stability across both FFI and TVM Runtime integrations.
-
-### Running Tests
-Use the serial test runner:
-```bash
-# Run all tests
-./test/run.sh all
-
-# Run only FFI-core tests (fftvm + TVM FFI)
-./test/run.sh ffi
-
-# Run only TVM-runtime tests (fftvm + TVM Runtime/Relax)
-./test/run.sh tvm
-```
-
-### Test Standards
-All tests must adhere to the standards defined in `test/rules.md`:
-- **Categorization**: `test/ffi/` for core features, `test/tvm/` for runtime features.
-- **Documentation**: Must include an objective description and **ASCII art** of the graph.
-- **Robustness**: Every test must run in a loop (at least twice) to check for side effects.
-- **Assertions**: No `print()` statements in final code; use strict assertions.
-- **Performance**: Must complete in < 1 second.
-
----
-
 ## User Guide
+
+### FastFlow Principles: Stream-Based Parallelism
+To effectively use FFTVM, it is helpful to understand the core principles of **FastFlow**:
+- **Stream Processing**: Data flows through a series of stages (Nodes) like a stream. Each stage processes one task at a time.
+- **Lock-Free Communication**: Tasks travel between stages via high-performance lock-free queues. This ensures minimal overhead even when passing thousands of tasks per second.
+- **Sequential within Parallel**: While the overall graph runs in parallel, each individual Node processes its tasks sequentially. This simplifies development as you don't need to worry about mutexes inside your `svc` function.
+- **Asynchrony**: Stages are decoupled. If one stage is slow, its input queue fills up, but other stages continue to operate at their own speed (back-pressure).
 
 ### The "Building Blocks" Philosophy
 To provide maximum architectural flexibility, FFTVM is designed around a set of composable "bricks." These nodes are classified purely by their connectivity (Cardinality):
+
+```mermaid
+graph TD
+    subgraph Nodes [Node Cardinality]
+    SiSo[SiSo: 1 Input, 1 Output]
+    SiMo[SiMo: 1 Input, M Outputs]
+    MiSo[MiSo: M Inputs, 1 Output]
+    MiMo[MiMo: M Inputs, M Outputs]
+    end
+```
+
 - **`SiSoNode`**: Single Input, Single Output.
 - **`SiMoNode`**: Single Input, Multiple Output.
 - **`MiSoNode`**: Multiple Input, Single Output.
@@ -110,6 +106,33 @@ Control the flow of data using these methods and tokens:
 
 ### Topology Building
 Assemble nodes into high-level parallel patterns:
+
+```mermaid
+graph LR
+    subgraph P_Topo [Pipeline Topology]
+    direction LR
+    P1[Stage 1] --> P2[Stage 2] --> P3[Stage 3]
+    end
+
+    subgraph F_Topo [Farm Topology]
+    direction LR
+    E[Emitter] --> W1[Worker 1]
+    E --> W2[Worker 2]
+    E --> W3[Worker 3]
+    W1 --> C[Collector]
+    W2 --> C
+    W3 --> C
+    end
+
+    subgraph A_Topo [A2A Topology]
+    direction LR
+    S1[Set A: 1] --- S2[Set B: 1]
+    S1 --- S3[Set B: 2]
+    S4[Set A: 2] --- S2
+    S4 --- S3
+    end
+```
+
 - **`Pipeline()`**: A linear sequence of stages.
 - **`Farm()`**: A master-worker pattern (Emitter -> Workers -> Collector).
 - **`A2A()`**: All-to-All pattern connecting two sets of nodes.
@@ -122,6 +145,22 @@ Assemble nodes into high-level parallel patterns:
 
 ## Showcase: Heterogeneous AI Workflow
 This example demonstrates a deep pipeline integrating real TVM models with nested parallel topologies. The native TVM inference workers execute outside the GIL, while Python handles orchestration and data generation.
+
+```mermaid
+graph LR
+    G[Data Gen] --> F{Farm}
+    subgraph Parallel Workers
+    F --> W1[Relax Worker 1]
+    F --> W2[Relax Worker 2]
+    F --> W3[Relax Worker 3]
+    F --> W4[Relax Worker 4]
+    end
+    W1 --> P[Post-Processing]
+    W2 --> P
+    W3 --> P
+    W4 --> P
+    P --> S[Sink]
+```
 
 ```python
 import fftvm as ff
@@ -150,6 +189,117 @@ p = (
 p.run_and_wait_end()
 ```
 
+### Advanced Pattern: All-to-All (A2A)
+The `A2A` topology is used for many-to-many communication, ideal for data shuffling or connecting multiple data sources to a pool of specialized workers.
+
+```mermaid
+graph LR
+    P1[Producer 1] --- C1[Consumer 1]
+    P1 --- C2[Consumer 2]
+    P2[Producer 2] --- C1
+    P2 --- C3[Consumer 3]
+    P3[Producer 3] --- C2
+    P3 --- C3
+```
+
+```python
+# Create an All-to-All pattern connecting 3 Producers to 5 Consumers
+a2a = (
+    ff.A2A()
+    .add_firstset([MyProducer() for _ in range(3)])
+    .add_secondset([MyConsumer() for _ in range(5)])
+)
+
+# A2A can be run standalone or as a stage in a larger Pipeline
+a2a.run_and_wait_end()
+```
+
+### Real-World Use Case: Parallelized Object Detection
+This example models a production-style inference pipeline where image pre-processing (Python) and model inference (TVM Relax) are overlapped to maximize hardware utilization.
+
+```mermaid
+graph TD
+    A[ImageLoader] --> B{Farm}
+    subgraph Workers
+        B --> W1[Relax: YOLO Worker 1]
+        B --> W2[Relax: YOLO Worker 2]
+    end
+    W1 --> C[ResultVisualizer]
+    W2 --> C
+```
+
+```python
+import fftvm as ff
+import tvm
+from tvm import relax
+
+# Load a compiled Object Detection model (e.g., YOLO or SSD)
+# This module executes outside the GIL on C++ threads
+model_mod = tvm.runtime.load_module("yolo_relax.so")
+
+class ImageLoader(ff.SiSoNode):
+    def svc(self, path):
+        # I/O Bound: Load and resize image in Python
+        img = load_and_preprocess(path) 
+        return img
+
+class ResultVisualizer(ff.SiSoNode):
+    def svc(self, detection_results):
+        # CPU Bound: Draw boxes and save results
+        save_to_disk(detection_results)
+        return ff.FFToken.GO_ON()
+
+# Build the pipeline
+# The Farm stage allows multiple images to be inferred in parallel
+# while the Loader is already fetching the next batch.
+pipeline = (
+    ff.Pipeline()
+    .add_stage(ImageLoader())
+    .add_stage(
+        ff.Farm().add_workers([
+            ff.SiSoNode(model_mod) for _ in range(2) # 2 GPU/NPU workers
+        ])
+    )
+    .add_stage(ResultVisualizer())
+)
+
+pipeline.run_and_wait_end()
+```
+
+### Native C++ Functions (FFI Inline)
+For maximum performance without the need for pre-compiled shared libraries, you can use the TVM FFI to load C++ source code directly. These functions are executed **without the GIL**, achieving native speed for compute-intensive tasks.
+
+```python
+import fftvm as ff
+import tvm_ffi
+
+# 1. Define C++ source for a high-performance stage
+cpp_source = '''
+#include <tvm/ffi/any.h>
+tvm::ffi::Any add_one(tvm::ffi::Any input) {
+    if (input.type_index() == 0) return tvm::ffi::Any(); 
+    int val = input.cast<int>();
+    return val + 1; 
+}
+'''
+
+# 2. Compile and load inline using TVM FFI
+native_mod = tvm_ffi.cpp.load_inline(
+    name="my_native_ops", 
+    cpp_sources=cpp_source, 
+    functions=['add_one']
+)
+
+# 3. Use the native function directly in a Node
+workflow = (
+    ff.Pipeline()
+    .add_stage(MyGenerator())
+    .add_stage(ff.SiSoNode(native_mod.add_one)) # Native FFI call
+    .add_stage(MySink())
+)
+workflow.run_and_wait_end()
+```
+
 ---
 
 ## Developer Section (Under the Hood)
@@ -157,6 +307,12 @@ p.run_and_wait_end()
 This section details the internal architecture for advanced users and contributors.
 
 ### Part A: Architecture & Memory Model
+
+#### FastFlow Framework: Stream Parallelism
+FFTVM uses **FastFlow** as its underlying execution engine. FastFlow is a high-performance C++ framework designed for **stream-based parallelism**.
+- **Dataflow Skeletons**: It provides high-level patterns (Farm, Pipeline, All-to-All) that map directly to multi-core architectures.
+- **Lock-Free Communication**: Tasks travel between stages via Single-Producer Single-Consumer (SPSC) or Multi-Producer Multi-Consumer (MPMC) lock-free queues. This eliminates the contention overhead typical of mutex-protected queues.
+- **Memory Consistency**: FastFlow ensures that when a worker finishes a task, the memory state is correctly synchronized for the next worker in the pipeline, which is critical for passing large TVM `NDArrays`.
 
 #### Native Execution & Interpreter Bypass
 When a pre-compiled TVM function (e.g., a compiled Relax module or a `PackedFunc` loaded from a shared library) is assigned to a node, FFTVM's execution engine performs a signature inspection. If the function is recognized as a native FFI object, the framework executes it directly within the FastFlow worker threads. This **completely bypasses the Python interpreter** during the critical path of execution, achieving "zero-copy" performance comparable to a native C++ implementation.
@@ -174,21 +330,37 @@ To make Python classes seamlessly compatible with the C++ engine, `fftvm/__init_
 2. It **detects arity**: If a function takes 1 argument, it passes only the `task`. If it takes 2, it passes `(self, task)`. This allows passing native FFI PackedFuncs (which don't have a `self`) directly to nodes.
 3. It dynamically wraps your Python method into a `tvm_ffi.Function`, ensuring the `self` context is maintained when the C++ thread invokes the callback.
 
-### Part B: The `tvm_ffi` Registration Pattern
+### Part B: The `tvm_ffi` Registration Pattern (The Bridge)
 
-A core part of FFTVM is how it leverages the TVM FFI to create a seamless object model between C++ and Python. This involves a dual-sided registration process.
+The core challenge of FFTVM is ensuring that a Python object and a C++ object behave as a single entity. We leverage the **TVM FFI Reflection System** to create this dynamic bridge.
 
-#### 1. C++ Side Registration
-Every object in FFTVM must inherit from `tvm::ffi::Object`. We use several macros to satisfy the TVM FFI requirements:
+#### 1. C++ Side Registration: Building the Interface
+Every C++ object in FFTVM must inherit from `tvm::ffi::Object`. To expose it to Python, we define its interface during the library's static initialization phase.
 
-- **`TVM_FFI_DECLARE_OBJECT_INFO`**: This macro registers the object's type name (e.g., `"fftvm.SiSoNode"`) and ensures it has a unique `type_index`. 
-- **`TVM_FFI_STATIC_INIT_BLOCK`**: This block runs during library loading. Inside, we use `tvm::ffi::reflection::ObjectDef<T>` to define the object's interface (constructors and methods).
+- **`TVM_FFI_DECLARE_OBJECT_INFO`**: This macro is added to the class definition. It assigns a unique `type_index` and a string identifier (e.g., `"fftvm.SiSoNode"`). This identifier is the key used by Python to find the corresponding C++ class.
+- **`TVM_FFI_STATIC_INIT_BLOCK`**: This block runs exactly once when `libfftvm.so` is loaded. Inside, we use `tvm::ffi::reflection::ObjectDef<T>` to "declare" the object's methods and constructors to the global TVM registry:
+  ```cpp
+  TVM_FFI_STATIC_INIT_BLOCK() {
+      tvm::ffi::reflection::ObjectDef<SiSoNode>()
+          .def(refl::init<Fn, int, Fn, Fn, Fn>()) // Constructor signature
+          .def("ff_send_out", ...);              // Exported method
+  }
+  ```
 
-#### 2. Python Side Mapping
-In `fftvm/__init__.py`, we use the `@tvm_ffi.register_object` decorator to link Python classes to the C++ registry.
+#### 2. The `ObjectRef` Pattern
+In C++, we use a "handle" pattern. The `SiSoNode` is the raw data object, while `SiSoNode_ref` is a reference-counted handle (`ObjectRef`). This allows C++ threads to safely share ownership of the nodes without manual `delete` calls, matching Python's garbage collection behavior.
 
-#### 3. How `__ffi_init__` Works
-When `self.__ffi_init__(...)` is called in Python, the TVM FFI identifies the constructor (`refl::init`) that matches the provided arguments, allocates the C++ object on the heap, and returns a reference-counted handletied to the Python instance.
+#### 3. Python Side Mapping: The Connection
+In `fftvm/__init__.py`, the `@tvm_ffi.register_object("fftvm.SiSoNode")` decorator tells the TVM FFI: *"This Python class is the official wrapper for the C++ object with this name."*
+
+#### 4. How `__ffi_init__` Establishes the Link
+The most critical moment is the call to `self.__ffi_init__(...)` in the Python constructor:
+1. **Reflection Lookup**: TVM FFI looks up the `"fftvm.SiSoNode"` entry in its global C++ registry.
+2. **Signature Matching**: It finds the `refl::init<...>` constructor whose arguments match the ones provided in Python.
+3. **Heap Allocation**: The FFI allocates the C++ `SiSoNode` object on the heap.
+4. **Handle Binding**: It returns a raw pointer (wrapped in an `ObjectRef`) and binds it to the Python instance's internal state. 
+
+From this point on, calling `self.ff_send_out(task)` in Python triggers a direct, low-latency call to the registered C++ method.
 
 ### Part C: Contribution Guide (The C++ Wrapper)
 
