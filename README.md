@@ -2,16 +2,21 @@
 
 FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It provides a Python-friendly API to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
 
+## Project Context: DARE (Research Project)
+This library was developed as part of the **DARE project** to explore the integration of stream-oriented parallelism within the TVM ecosystem. The core objective is to bridge **FastFlow** and **TVM’s FFI ABI**, enabling the construction of asynchronous inference pipelines where throughput is optimized through the coordination of heterogeneous stages.
+
 ## Motivation & The "Why"
 
 ### The Problem
 In Python, true multithreading is blocked by the Global Interpreter Lock (GIL). Multiprocessing bypasses the GIL but introduces massive serialization overhead (Pickling), which destroys performance when passing large data structures like Deep Learning Tensors (`NDArray`). 
 
-### The Solution: Native TVM Ecosystem Integration
-FFTVM isn't just a general-purpose parallel library; it is built on **TVM FFI**. This choice ensures **native compatibility with the entire TVM ecosystem**. 
+### The Solution: ABI-Level Structural Integration
+FFTVM isn't just a general-purpose parallel library; it realizes a **structural integration at the ABI (Application Binary Interface) level**. 
 - **Production-Ready AI Inference**: Pass `tvm.runtime.NDArray` objects between nodes with zero-copy.
 - **Unified Memory Model**: Leverage TVM's reference-counted memory across C++ threads without the overhead of context switching between different memory managers.
 - **Hardware Orchestration**: Easily build workflows where different stages or workers in a `Farm` are pinned to specific hardware accelerators (GPUs, NPUs, DSPs).
+
+By embedding FastFlow constructs directly into TVM's native type system, the parallel engine becomes a seamless extension of the TVM runtime, ensuring that tasks transitioning between Python and C++ maintain strict memory safety without conversion overhead.
 
 ### The Result & Superpower
 With FFTVM, you construct your parallel graph topology (e.g., Pipeline, Farm) entirely in Python. During execution, the graph runs on C++ FastFlow threads. 
@@ -80,12 +85,14 @@ All tests must adhere to the standards defined in `test/rules.md`:
 
 ## User Guide
 
-### Node Types (Cardinality)
-Every node in FFTVM dictates the cardinality of its input and output links within the graph:
+### The "Building Blocks" Philosophy
+To provide maximum architectural flexibility, FFTVM is designed around a set of composable "bricks." These nodes are classified purely by their connectivity (Cardinality):
 - **`SiSoNode`**: Single Input, Single Output.
 - **`SiMoNode`**: Single Input, Multiple Output.
 - **`MiSoNode`**: Multiple Input, Single Output.
 - **`MiMoNode`**: Multiple Input, Multiple Output.
+
+By decoupling the **Calculation Logic** from the **Topology** (Pipeline, Farm, A2A), developers can compose complex, scalable calculation topologies while maintaining a clean, linear development approach.
 
 ### The Node Lifecycle
 When writing a custom Python node, you implement specific methods invoked by the FastFlow C++ engine:
@@ -113,8 +120,8 @@ Assemble nodes into high-level parallel patterns:
 
 ---
 
-## Showcase: Real TVM Relax Workflow
-This example shows a pipeline where a **real TVM Relax model** executes inside a FastFlow node completely outside the GIL.
+## Showcase: Heterogeneous AI Workflow
+This example demonstrates a deep pipeline integrating real TVM models with nested parallel topologies. The native TVM inference workers execute outside the GIL, while Python handles orchestration and data generation.
 
 ```python
 import fftvm as ff
@@ -122,29 +129,25 @@ import tvm
 from tvm import relax
 import numpy as np
 
-# 1. Define a Relax Model (Compiled to Native Code)
-@tvm.script.ir_module
-class MyRelaxModule:
-    @relax.script.R.function
-    def main(x: relax.script.R.Tensor((1,), "int32")):
-        with relax.script.R.dataflow():
-            lv0 = relax.script.R.multiply(x, relax.script.R.const(2, "int32"))
-            relax.script.R.output(lv0)
-        return lv0
+# 1. Load a pre-compiled TVM model (Native FFI)
+# Compiled Relax modules execute directly on C++ worker threads.
+net = tvm.runtime.load_module("model.so")
 
-# 2. Build and Setup VM
-ex = relax.build(MyRelaxModule, target="llvm")
-vm = relax.VirtualMachine(ex, tvm.cpu())
-
-# 3. Use vm["main"] directly in a Node (GIL-Free)
-# FFTVM automatically detects that vm["main"] takes 1 argument (the task)
-workflow = (
+# 2. Define a Complex Heterogeneous Topology
+# Pipelining stages, including a Master-Worker Farm for inference
+p = (
     ff.Pipeline()
-    .add_stage(MyGenerator())
-    .add_stage(ff.SiSoNode(vm["main"])) # Native FFI call bypassing GIL
-    .add_stage(MySink())
+    .add_stage(ff.SiMoNode(data_generator))       # Stage 1: Data Generation & Distribution
+    .add_stage(
+        ff.Farm().add_workers([
+            ff.MiSoNode(net) for _ in range(4)    # Stage 2: Parallel Inference (4 Native Workers)
+        ])
+    )
+    .add_stage(ff.SiSoNode(post_processing_fn))   # Stage 3: Feature Extraction (Pipelining)
+    .add_stage(ff.SiSoNode(lambda x: print(x)))   # Stage 4: Output / Sink
 )
-workflow.run_and_wait_end()
+
+p.run_and_wait_end()
 ```
 
 ---
@@ -154,6 +157,9 @@ workflow.run_and_wait_end()
 This section details the internal architecture for advanced users and contributors.
 
 ### Part A: Architecture & Memory Model
+
+#### Native Execution & Interpreter Bypass
+When a pre-compiled TVM function (e.g., a compiled Relax module or a `PackedFunc` loaded from a shared library) is assigned to a node, FFTVM's execution engine performs a signature inspection. If the function is recognized as a native FFI object, the framework executes it directly within the FastFlow worker threads. This **completely bypasses the Python interpreter** during the critical path of execution, achieving "zero-copy" performance comparable to a native C++ implementation.
 
 #### Thread Mapping & TVM Reference Counting
 Every Node instantiated in Python triggers the creation of an underlying C++ `ff::ff_node` derived class. FastFlow maps this node to a physical OS thread. 
