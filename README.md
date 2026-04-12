@@ -2,6 +2,31 @@
 
 FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It provides a Python-friendly API to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
 
+## Table of Contents
+- [External Documentation](#external-documentation)
+- [Project Context: DARE (Research Project)](#project-context-dare-research-project)
+- [Motivation & The "Why"](#motivation--the-why)
+    - [The Problem](#the-problem)
+    - [The Solution: ABI-Level Structural Integration](#the-solution-abi-level-structural-integration)
+    - [The Result & Superpower](#the-result--superpower)
+- [Installation](#installation)
+    - [For Users](#for-users)
+    - [For Developers](#for-developers)
+- [User Guide](#user-guide)
+    - [FastFlow Principles: Stream-Based Parallelism](#fastflow-principles-stream-based-parallelism)
+    - [The "Building Blocks" Philosophy](#the-building-blocks-philosophy)
+    - [The Node Lifecycle](#the-node-lifecycle)
+    - [Task Routing & Tokens](#task-routing--tokens)
+    - [Parallel Topologies (Coordination Blocks)](#parallel-topologies-coordination-blocks)
+- [Showcase: Heterogeneous AI Workflow](#showcase-heterogeneous-ai-workflow)
+    - [Real-World Use Case: Parallelized Object Detection](#real-world-use-case-parallelized-object-detection)
+    - [Native C++ Functions (FFI Inline)](#native-c-functions-ffi-inline)
+- [Developer Section (Under the Hood)](#developer-section-under-the-hood)
+    - [Part A: Architecture & Memory Model](#part-a-architecture--memory-model)
+    - [Part B: The tvm_ffi Registration Pattern (The Bridge)](#part-b-the-tvm_ffi-registration-pattern-the-bridge)
+    - [Part C: Contribution Guide (The C++ Wrapper)](#part-c-contribution-guide-the-c-wrapper)
+- [Future Roadmap: Distributed Systems](#future-roadmap-distributed-systems)
+
 ## External Documentation
 For a deeper understanding of the underlying frameworks, please refer to:
 - **FastFlow**: [FastFlow GitHub & Wiki](https://github.com/fastflow/fastflow)
@@ -32,7 +57,7 @@ The true superpower of FFTVM is **Heterogeneous AI Workflows**:
 
 ---
 
-## 1. Installation
+## Installation
 
 ### For Users
 FFTVM is available on PyPI. Ensure you have the TVM runtime installed on your system.
@@ -71,23 +96,22 @@ To effectively use FFTVM, it is helpful to understand the core principles of **F
 - **Asynchrony**: Stages are decoupled. If one stage is slow, its input queue fills up, but other stages continue to operate at their own speed (back-pressure).
 
 ### The "Building Blocks" Philosophy
-FFTVM nodes are defined by their cardinality, which determines their role in a parallel graph:
+FFTVM adopts the core philosophy of **FastFlow**, where complex parallel systems are constructed using a set of composable "bricks" or building blocks. These blocks are classified into two categories:
 
-```mermaid
-graph LR
-    subgraph Roles [Node Roles]
-    direction LR
-    SiSo[SiSo: Worker]
-    SiMo[SiMo: Scatterer / Emitter]
-    MiSo[MiSo: Gatherer / Collector]
-    end
-```
+#### 1. Functional Nodes (Cardinality)
+These are the basic processing units defined by their connectivity:
+- **`SiSoNode`**: Single Input, Single Output.
+- **`SiMoNode`**: Single Input, Multiple Output.
+- **`MiSoNode`**: Multiple Input, Single Output.
+- **`MiMoNode`**: Multiple Input, Multiple Output.
 
-- **`SiSoNode`**: **Worker**. Processes 1 task from 1 input, produces 1 output.
-- **`SiMoNode`**: **Scatterer / Emitter**. Receives 1 task and can distribute it to multiple downstream workers (via `ff_send_out_to`).
-- **`MiSoNode`**: **Gatherer / Collector**. Receives tasks from multiple upstream workers and produces a single output stream.
+#### 2. Parallel Patterns (Topologies)
+In FastFlow, parallel skeletons are themselves building blocks that can be nested and composed:
+- **`Pipeline()`**: A linear sequence of stages.
+- **`Farm()`**: A master-worker pattern for data parallelism.
+- **`A2A()`**: An All-to-All pattern for many-to-many communication.
 
-By choosing the right node type, you can "collapse" the parallel coordination logic directly into your functional stages.
+By decoupling the **Calculation Logic** (inside nodes) from the **Topology** (the coordination block), developers can build complex, scalable architectures through simple composition.
 
 ### The Node Lifecycle
 When writing a custom Python node, you implement specific methods invoked by the FastFlow C++ engine:
@@ -103,23 +127,40 @@ Control the flow of data using these methods and tokens:
 - `return ff.FFToken.EOS()`: Signal that the stream has ended.
 - `return ff.FFToken.GO_ON()`: Signal that the node has processed the task but has no output to return.
 
-### Topology Building
-Assemble nodes into high-level parallel patterns:
+### Parallel Topologies (Coordination Blocks)
+In FastFlow, coordination patterns are themselves building blocks that can be nested and composed:
 
 ```mermaid
 graph LR
-    subgraph CollapsedFarm [Collapsed Farm in Pipeline]
+    subgraph Pipeline
     direction LR
-    S1[Stage 1: SiMo Scatterer] --> W1[Worker 1: SiSo]
-    S1 --> W2[Worker 2: SiSo]
-    W1 --> S3[Stage 3: MiSo Gatherer]
-    W2 --> S3
+    P1[ ] --> P2[ ] --> P3[ ]
     end
 ```
 
-- **`Pipeline()`**: A linear sequence of stages.
-- **`Farm()`**: A master-worker pattern. In a Pipeline, you don't need to add an internal Emitter/Collector; the stage **before** the Farm handles the scattering (must be `SiMo`) and the stage **after** handles the gathering (must be `MiSo`).
-- **`A2A()`**: All-to-All pattern connecting two sets of nodes.
+```mermaid
+graph LR
+    subgraph Farm
+    direction LR
+    Scatter[ ] --> W1[ ]
+    Scatter --> W2[ ]
+    Scatter --> W3[ ]
+    W1 --> Gather[ ]
+    W2 --> Gather
+    W3 --> Gather
+    end
+```
+
+```mermaid
+graph LR
+    subgraph A2A
+    direction LR
+    S1A[ ] --- S1B[ ]
+    S1A --- S2B[ ]
+    S2A[ ] --- S1B
+    S2A --- S2B
+    end
+```
 
 **⚠️ Crucial Rule**: When providing a list of workers to a Farm or A2A, you *must* instantiate independent objects. Do not multiply a single instance.
 *Correct*: `[MyWorker() for _ in range(5)]`
@@ -132,14 +173,14 @@ This example demonstrates a **Collapsed Farm** where the generator and post-proc
 
 ```mermaid
 graph LR
-    G[SiMo: Data Gen] --> F{Farm}
-    subgraph Parallel Workers
-    F --> W1[SiSo: Worker 1]
-    F --> W2[SiSo: Worker 2]
-    F --> W3[SiSo: Worker 3]
-    F --> W4[SiSo: Worker 4]
+    G[ ] --> F{ }
+    subgraph Workers
+    F --> W1[ ]
+    F --> W2[ ]
+    F --> W3[ ]
+    F --> W4[ ]
     end
-    W1 --> P[MiSo: Post-Processing]
+    W1 --> P[ ]
     W2 --> P
     W3 --> P
     W4 --> P
@@ -174,9 +215,9 @@ By using a `SiMo` node for the loader and a `MiSo` node for the visualizer, the 
 
 ```mermaid
 graph LR
-    L[SiMo: ImageLoader] --> W1[SiSo: YOLO Worker 1]
-    L --> W2[SiSo: YOLO Worker 2]
-    W1 --> V[MiSo: ResultVisualizer]
+    L[ ] --> W1[ ]
+    L --> W2[ ]
+    W1 --> V[ ]
     W2 --> V
 ```
 
