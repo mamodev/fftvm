@@ -71,24 +71,23 @@ To effectively use FFTVM, it is helpful to understand the core principles of **F
 - **Asynchrony**: Stages are decoupled. If one stage is slow, its input queue fills up, but other stages continue to operate at their own speed (back-pressure).
 
 ### The "Building Blocks" Philosophy
-To provide maximum architectural flexibility, FFTVM is designed around a set of composable "bricks." These nodes are classified purely by their connectivity (Cardinality):
+FFTVM nodes are defined by their cardinality, which determines their role in a parallel graph:
 
 ```mermaid
-graph TD
-    subgraph Nodes [Node Cardinality]
-    SiSo[SiSo: 1 Input, 1 Output]
-    SiMo[SiMo: 1 Input, M Outputs]
-    MiSo[MiSo: M Inputs, 1 Output]
-    MiMo[MiMo: M Inputs, M Outputs]
+graph LR
+    subgraph Roles [Node Roles]
+    direction LR
+    SiSo[SiSo: Worker]
+    SiMo[SiMo: Scatterer / Emitter]
+    MiSo[MiSo: Gatherer / Collector]
     end
 ```
 
-- **`SiSoNode`**: Single Input, Single Output.
-- **`SiMoNode`**: Single Input, Multiple Output.
-- **`MiSoNode`**: Multiple Input, Single Output.
-- **`MiMoNode`**: Multiple Input, Multiple Output.
+- **`SiSoNode`**: **Worker**. Processes 1 task from 1 input, produces 1 output.
+- **`SiMoNode`**: **Scatterer / Emitter**. Receives 1 task and can distribute it to multiple downstream workers (via `ff_send_out_to`).
+- **`MiSoNode`**: **Gatherer / Collector**. Receives tasks from multiple upstream workers and produces a single output stream.
 
-By decoupling the **Calculation Logic** from the **Topology** (Pipeline, Farm, A2A), developers can compose complex, scalable calculation topologies while maintaining a clean, linear development approach.
+By choosing the right node type, you can "collapse" the parallel coordination logic directly into your functional stages.
 
 ### The Node Lifecycle
 When writing a custom Python node, you implement specific methods invoked by the FastFlow C++ engine:
@@ -109,32 +108,17 @@ Assemble nodes into high-level parallel patterns:
 
 ```mermaid
 graph LR
-    subgraph P_Topo [Pipeline Topology]
+    subgraph CollapsedFarm [Collapsed Farm in Pipeline]
     direction LR
-    P1[Stage 1] --> P2[Stage 2] --> P3[Stage 3]
-    end
-
-    subgraph F_Topo [Farm Topology]
-    direction LR
-    E[Emitter] --> W1[Worker 1]
-    E --> W2[Worker 2]
-    E --> W3[Worker 3]
-    W1 --> C[Collector]
-    W2 --> C
-    W3 --> C
-    end
-
-    subgraph A_Topo [A2A Topology]
-    direction LR
-    S1[Set A: 1] --- S2[Set B: 1]
-    S1 --- S3[Set B: 2]
-    S4[Set A: 2] --- S2
-    S4 --- S3
+    S1[Stage 1: SiMo Scatterer] --> W1[Worker 1: SiSo]
+    S1 --> W2[Worker 2: SiSo]
+    W1 --> S3[Stage 3: MiSo Gatherer]
+    W2 --> S3
     end
 ```
 
 - **`Pipeline()`**: A linear sequence of stages.
-- **`Farm()`**: A master-worker pattern (Emitter -> Workers -> Collector).
+- **`Farm()`**: A master-worker pattern. In a Pipeline, you don't need to add an internal Emitter/Collector; the stage **before** the Farm handles the scattering (must be `SiMo`) and the stage **after** handles the gathering (must be `MiSo`).
 - **`A2A()`**: All-to-All pattern connecting two sets of nodes.
 
 **⚠️ Crucial Rule**: When providing a list of workers to a Farm or A2A, you *must* instantiate independent objects. Do not multiply a single instance.
@@ -144,22 +128,21 @@ graph LR
 ---
 
 ## Showcase: Heterogeneous AI Workflow
-This example demonstrates a deep pipeline integrating real TVM models with nested parallel topologies. The native TVM inference workers execute outside the GIL, while Python handles orchestration and data generation.
+This example demonstrates a **Collapsed Farm** where the generator and post-processor handle the parallel coordination.
 
 ```mermaid
 graph LR
-    G[Data Gen] --> F{Farm}
+    G[SiMo: Data Gen] --> F{Farm}
     subgraph Parallel Workers
-    F --> W1[Relax Worker 1]
-    F --> W2[Relax Worker 2]
-    F --> W3[Relax Worker 3]
-    F --> W4[Relax Worker 4]
+    F --> W1[SiSo: Worker 1]
+    F --> W2[SiSo: Worker 2]
+    F --> W3[SiSo: Worker 3]
+    F --> W4[SiSo: Worker 4]
     end
-    W1 --> P[Post-Processing]
+    W1 --> P[MiSo: Post-Processing]
     W2 --> P
     W3 --> P
     W4 --> P
-    P --> S[Sink]
 ```
 
 ```python
@@ -169,98 +152,51 @@ from tvm import relax
 import numpy as np
 
 # 1. Load a pre-compiled TVM model (Native FFI)
-# Compiled Relax modules execute directly on C++ worker threads.
 net = tvm.runtime.load_module("model.so")
 
-# 2. Define a Complex Heterogeneous Topology
-# Pipelining stages, including a Master-Worker Farm for inference
+# 2. Define a Pipeline with a Collapsed Farm
 p = (
     ff.Pipeline()
-    .add_stage(ff.SiMoNode(data_generator))       # Stage 1: Data Generation & Distribution
+    .add_stage(ff.SiMoNode(data_generator))       # Scatterer: Logic handles distribution
     .add_stage(
         ff.Farm().add_workers([
-            ff.MiSoNode(net) for _ in range(4)    # Stage 2: Parallel Inference (4 Native Workers)
+            ff.SiSoNode(net) for _ in range(4)    # Workers: Native TVM nodes
         ])
     )
-    .add_stage(ff.SiSoNode(post_processing_fn))   # Stage 3: Feature Extraction (Pipelining)
-    .add_stage(ff.SiSoNode(lambda x: print(x)))   # Stage 4: Output / Sink
+    .add_stage(ff.MiSoNode(post_processing_fn))   # Gatherer: Logic handles collection
 )
 
 p.run_and_wait_end()
 ```
 
-### Advanced Pattern: All-to-All (A2A)
-The `A2A` topology is used for many-to-many communication, ideal for data shuffling or connecting multiple data sources to a pool of specialized workers.
+### Real-World Use Case: Parallelized Object Detection
+By using a `SiMo` node for the loader and a `MiSo` node for the visualizer, the Farm's parallel coordination is completely transparent.
 
 ```mermaid
 graph LR
-    P1[Producer 1] --- C1[Consumer 1]
-    P1 --- C2[Consumer 2]
-    P2[Producer 2] --- C1
-    P2 --- C3[Consumer 3]
-    P3[Producer 3] --- C2
-    P3 --- C3
-```
-
-```python
-# Create an All-to-All pattern connecting 3 Producers to 5 Consumers
-a2a = (
-    ff.A2A()
-    .add_firstset([MyProducer() for _ in range(3)])
-    .add_secondset([MyConsumer() for _ in range(5)])
-)
-
-# A2A can be run standalone or as a stage in a larger Pipeline
-a2a.run_and_wait_end()
-```
-
-### Real-World Use Case: Parallelized Object Detection
-This example models a production-style inference pipeline where image pre-processing (Python) and model inference (TVM Relax) are overlapped to maximize hardware utilization.
-
-```mermaid
-graph TD
-    A[ImageLoader] --> B{Farm}
-    subgraph Workers
-        B --> W1[Relax: YOLO Worker 1]
-        B --> W2[Relax: YOLO Worker 2]
-    end
-    W1 --> C[ResultVisualizer]
-    W2 --> C
+    L[SiMo: ImageLoader] --> W1[SiSo: YOLO Worker 1]
+    L --> W2[SiSo: YOLO Worker 2]
+    W1 --> V[MiSo: ResultVisualizer]
+    W2 --> V
 ```
 
 ```python
 import fftvm as ff
 import tvm
-from tvm import relax
 
-# Load a compiled Object Detection model (e.g., YOLO or SSD)
-# This module executes outside the GIL on C++ threads
+# Load compiled model
 model_mod = tvm.runtime.load_module("yolo_relax.so")
 
-class ImageLoader(ff.SiSoNode):
-    def svc(self, path):
-        # I/O Bound: Load and resize image in Python
-        img = load_and_preprocess(path) 
-        return img
-
-class ResultVisualizer(ff.SiSoNode):
-    def svc(self, detection_results):
-        # CPU Bound: Draw boxes and save results
-        save_to_disk(detection_results)
-        return ff.FFToken.GO_ON()
-
-# Build the pipeline
-# The Farm stage allows multiple images to be inferred in parallel
-# while the Loader is already fetching the next batch.
+# Build the pipeline with collapsed coordination
 pipeline = (
     ff.Pipeline()
-    .add_stage(ImageLoader())
+    .add_stage(ImageLoader_SiMo())                # Scatterer
     .add_stage(
         ff.Farm().add_workers([
-            ff.SiSoNode(model_mod) for _ in range(2) # 2 GPU/NPU workers
+            ff.SiSoNode(model_mod) for _ in range(2)
         ])
     )
-    .add_stage(ResultVisualizer())
+    .add_stage(ResultVisualizer_MiSo())           # Gatherer
 )
 
 pipeline.run_and_wait_end()
