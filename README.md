@@ -2,39 +2,49 @@
 
 FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It provides a Python-friendly API to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
 
-## Table of Contents
-- [External Documentation](#external-documentation)
-- [Project Context: DARE (Research Project)](#project-context-dare-research-project)
-- [Motivation & The "Why"](#motivation--the-why)
-    - [The Problem](#the-problem)
-    - [The Solution: ABI-Level Structural Integration](#the-solution-abi-level-structural-integration)
-    - [The Result & Superpower](#the-result--superpower)
-- [Installation](#installation)
-    - [For Users](#for-users)
-    - [For Developers](#for-developers)
-- [User Guide](#user-guide)
-    - [FastFlow Principles: Stream-Based Parallelism](#fastflow-principles-stream-based-parallelism)
-    - [The "Building Blocks" Philosophy](#the-building-blocks-philosophy)
-    - [The Node Lifecycle](#the-node-lifecycle)
-    - [Task Routing & Tokens](#task-routing--tokens)
-    - [Creating a Node](#creating-a-node)
-    - [Composing Topologies](#composing-topologies)
-- [Showcase: Advanced Parallel Workflows](#showcase-advanced-parallel-workflows)
-    - [The "Grand Tour": Hierarchical Traffic Orchestration Engine](#the-grand-tour-hierarchical-traffic-orchestration-engine)
-    - [Specialized Examples](#specialized-examples)
-- [Developer Section (Under the Hood)](#developer-section-under-the-hood)
-    - [Part A: Architecture & Memory Model](#part-a-architecture--memory-model)
-    - [Part B: The tvm_ffi Registration Pattern (The Bridge)](#part-b-the-tvm_ffi-registration-pattern-the-bridge)
-    - [Part C: Contribution Guide (The C++ Wrapper)](#part-c-contribution-guide-the-c-wrapper)
-- [Future Roadmap: Distributed Systems](#future-roadmap-distributed-systems)
+## 📑 Table of Contents
+- [📖 External Documentation](#external-documentation)
+- [🎯 Project Context: DARE (Research Project)](#project-context-dare-research-project)
+- [💡 Motivation & The "Why"](#motivation--the-why)
+    - [❓ The Problem](#the-problem)
+    - [✅ The Solution: ABI-Level Structural Integration](#the-solution-abi-level-structural-integration)
+    - [⚡ The Result & Superpower](#the-result--superpower)
+- [📦 Installation](#installation)
+    - [👤 For Users](#for-users)
+    - [🛠️ For Developers](#for-developers)
+- [📘 User Guide](#user-guide)
+    - [🌊 FastFlow Principles: Stream-Based Parallelism](#fastflow-principles-stream-based-parallelism)
+    - [🧱 The "Building Blocks" Philosophy](#the-building-blocks-philosophy)
+    - [🔄 The Node Lifecycle](#the-node-lifecycle)
+    - [🚦 Task Routing & Tokens](#task-routing--tokens)
+    - [➕ Creating a Node](#creating-a-node)
+    - [🏗️ Composing Topologies](#composing-topologies)
+- [🌟 Showcase: Advanced Parallel Workflows](#showcase-advanced-parallel-workflows)
+    - [🏙️ The "Grand Tour": Hierarchical Traffic Orchestration Engine](#the-grand-tour-hierarchical-traffic-orchestration-engine)
+- [🛡️ Developer Section (Under the Hood)](#developer-section-under-the-hood)
+    - [🏗️ Part A: Architecture & Memory Model](#part-a-architecture--memory-model)
+    - [🌉 Part B: The TVM FFI Infrastructure (Under the Hood)](#part-b-the-tvm-ffi-infrastructure-under-the-hood)
+    - [📝 Part C: Low-Level Implementation Notes (libfftvm.cpp)](#part-c-low-level-implementation-notes-libfftvmcpp)
+    - [🔬 Part D: The TVM Runtime & Execution Model (Research Deep-Dive)](#part-d-the-tvm-runtime--execution-model-research-deep-dive)
+- [🚀 Future Roadmap: Distributed Systems](#future-roadmap-distributed-systems)
 
 ## External Documentation
 For a deeper understanding of the underlying frameworks, please refer to:
 - **FastFlow**: [FastFlow GitHub & Wiki](https://github.com/fastflow/fastflow)
 - **Apache TVM FFI**: [TVM FFI Documentation](https://tvm.apache.org/docs/arch/index.html) (Core FFI and Object System)
 
-## Project Context: DARE (Research Project)
-This library was developed as part of the **DARE project** to explore the integration of stream-oriented parallelism within the TVM ecosystem. The core objective is to bridge **FastFlow** and **TVM’s FFI ABI**, enabling the construction of asynchronous inference pipelines where throughput is optimized through the coordination of heterogeneous stages.
+## 🎯 Project Context: DARE (Research Project)
+
+<p align="center">
+  <img src="https://dare-europe.eu/wp-content/uploads/2025/11/DARE-Logo.svg" width="200" alt="DARE Logo">
+  <br>
+  <img src="https://pisa.esn.it/sites/esnpisa.it/files/pages/images/unipi-logo-png-3.png" width="150" alt="Unipi Logo">
+</p>
+
+This library was developed as part of the [**DARE Project**](https://dare-europe.eu/) (Distributed AI for REal-time applications) to explore the integration of stream-oriented parallelism within the TVM ecosystem. 
+
+FFTVM is a research project from the **University of Pisa (Unipi)**, developed under the leadership of [**Massimo Torquati**](https://pages.di.unipi.it/torquati/). The core objective is to bridge **FastFlow** and **TVM’s FFI ABI**, enabling the construction of asynchronous inference pipelines where throughput is optimized through the coordination of heterogeneous stages.
+
 
 ## Motivation & The "Why"
 
@@ -60,7 +70,7 @@ The true superpower of FFTVM is **Heterogeneous AI Workflows**:
 
 ## Installation
 
-### For Users
+### 👤 For Users
 FFTVM is available on PyPI. Ensure you have the TVM runtime installed on your system.
 ```bash
 pip install fftvm
@@ -509,55 +519,145 @@ To make Python classes seamlessly compatible with the C++ engine, `fftvm/__init_
 2. It **detects arity**: If a function takes 1 argument, it passes only the `task`. If it takes 2, it passes `(self, task)`. This allows passing native FFI PackedFuncs (which don't have a `self`) directly to nodes.
 3. It dynamically wraps your Python method into a `tvm_ffi.Function`, ensuring the `self` context is maintained when the C++ thread invokes the callback.
 
-### Part B: The `tvm_ffi` Registration Pattern (The Bridge)
+### Part B: The TVM FFI Infrastructure (Under the Hood)
 
-The core challenge of FFTVM is ensuring that a Python object and a C++ object behave as a single entity. We leverage the **TVM FFI Reflection System** to create this dynamic bridge.
+FFTVM relies on the `apache-tvm-ffi` library to provide a unified object model. Understanding how TVM manages types and memory is crucial for extending the project.
 
-#### 1. C++ Side Registration: Building the Interface
-Every C++ object in FFTVM must inherit from `tvm::ffi::Object`. To expose it to Python, we define its interface during the library's static initialization phase.
+<details>
+<summary><b>1. The Unified Type System (`type_index`)</b></summary>
 
-- **`TVM_FFI_DECLARE_OBJECT_INFO`**: This macro is added to the class definition. It assigns a unique `type_index` and a string identifier (e.g., `"fftvm.SiSoNode"`). This identifier is the key used by Python to find the corresponding C++ class.
-- **`TVM_FFI_STATIC_INIT_BLOCK`**: This block runs exactly once when `libfftvm.so` is loaded. Inside, we use `tvm::ffi::reflection::ObjectDef<T>` to "declare" the object's methods and constructors to the global TVM registry:
-  ```cpp
-  TVM_FFI_STATIC_INIT_BLOCK() {
-      tvm::ffi::reflection::ObjectDef<SiSoNode>()
-          .def(refl::init<Fn, int, Fn, Fn, Fn>()) // Constructor signature
-          .def("ff_send_out", ...);              // Exported method
-  }
-  ```
+TVM does not use standard C++ RTTI. Instead, it maintains a global **Type Registry**.
+- **Static vs. Dynamic**: Every class (e.g., `SiSoNode`) is assigned a unique integer `type_index`.
+- **Registration**: The `TVM_FFI_DECLARE_OBJECT_INFO` macro registers a string identifier (like `"fftvm.SiSoNode"`) and ensures that `_GetOrAllocRuntimeTypeIndex()` returns a consistent ID across different shared libraries.
+- **Hierarchy**: All managed objects must inherit from `tvm::ffi::Object`. This allows for a single root type and safe downcasting via `.cast<T>()`.
+</details>
 
-#### 2. The `ObjectRef` Pattern
-In C++, we use a "handle" pattern. The `SiSoNode` is the raw data object, while `SiSoNode_ref` is a reference-counted handle (`ObjectRef`). This allows C++ threads to safely share ownership of the nodes without manual `delete` calls, matching Python's garbage collection behavior.
+<details>
+<summary><b>2. Memory Model: `Object` and `ObjectRef`</b></summary>
 
-#### 3. Python Side Mapping: The Connection
-In `fftvm/__init__.py`, the `@tvm_ffi.register_object("fftvm.SiSoNode")` decorator tells the TVM FFI: *"This Python class is the official wrapper for the C++ object with this name."*
+TVM uses a **Handle-Body** pattern to bridge Python and C++ memory management.
+- **The Body (`Object`)**: Contains the raw data and an atomic reference counter. It lives on the heap.
+- **The Handle (`ObjectRef`)**: A stack-allocated smart pointer. When an `ObjectRef` is copied (including when passed to Python), the body's reference count is incremented.
+- **Python Integration**: The Python object holds a pointer to the C++ `Object` and participates in the reference counting. When the Python object is garbage-collected, the C++ ref count decrements, potentially triggering `delete`.
+</details>
 
-#### 4. How `__ffi_init__` Establishes the Link
-The most critical moment is the call to `self.__ffi_init__(...)` in the Python constructor:
-1. **Reflection Lookup**: TVM FFI looks up the `"fftvm.SiSoNode"` entry in its global C++ registry.
-2. **Signature Matching**: It finds the `refl::init<...>` constructor whose arguments match the ones provided in Python.
-3. **Heap Allocation**: The FFI allocates the C++ `SiSoNode` object on the heap.
-4. **Handle Binding**: It returns a raw pointer (wrapped in an `ObjectRef`) and binds it to the Python instance's internal state. 
+<details>
+<summary><b>3. The Global Reflection Registry</b></summary>
 
-From this point on, calling `self.ff_send_out(task)` in Python triggers a direct, low-latency call to the registered C++ method.
+How does Python know `ff_send_out` exists in C++?
+- **`ObjectDef<T>`**: Inside the `TVM_FFI_STATIC_INIT_BLOCK`, we populate a reflection table for each type. 
+- **Method Binding**: `.def("name", function)` stores a `PackedFunc` (a type-erased function wrapper) in a global registry keyed by `(type_index, "method_name")`.
+- **Lookup**: When you call `node.ff_send_out()` in Python, the FFI performs a runtime lookup in this registry and invokes the bound C++ lambda.
+</details>
 
-### Part C: Contribution Guide (The C++ Wrapper)
+<details>
+<summary><b>4. Type-Erasure via `tvm::ffi::Any`</b></summary>
 
-#### The C++ Forwarder (`libfftvm.cpp`)
-The core mechanic of FFTVM is the translation between FastFlow's `void* svc(void* t)` signature and TVM's `tvm::ffi::Function`. 
+The `Any` container is the fundamental unit of data exchange in TVM.
+- **Structure**: It is a small union (8-16 bytes) that can hold a primitive (int, float) or a pointer to a `tvm::ffi::Object`.
+- **Zero-Copy**: Because `NDArray` is a `tvm::ffi::Object`, passing it via `Any` simply passes a pointer and increments a reference count. No data is copied.
+- **Uniform ABI**: All FFI functions share the same signature: `Any(Any* args, int num_args)`. This makes it trivial to wrap any C++ function into a `PackedFunc` callable from Python.
+</details>
 
-For example, in `SiSoNodeImpl::svc(Any* t)`:
-1. The incoming `Any*` task is dereferenced and passed to the TVM `m_svc` function.
-2. The incoming `Any*` container is immediately freed (`ff_free_any(t)`).
-3. The resulting return value from TVM is dynamically allocated via `ff_alloc_any` and passed down the FastFlow queue.
+### Part C: Low-Level Implementation Notes (`libfftvm.cpp`)
 
-#### FFToken Pointer Hacks
-FastFlow uses specific memory addresses (like `(void*)-1`) to represent control tokens like `EOS`. Because FFTVM strictly passes `Any*`, returning an `EOS` requires a low-level workaround. In C++, `FFToken::Key` constants are defined. When the C++ forwarder detects an `FFToken` returned from TVM, it reinterprets the internal ID back into the raw memory address pointer (`reinterpret_cast<Any *>(...key)`) that FastFlow expects natively.
+The core of FFTVM is a C++ "Forwarder" that translates between FastFlow's raw pointer-based message passing and TVM's high-level FFI system.
 
-#### Build System Integration
-The `setup.py` script orchestrates the build. The C++ extension `fftvm._lib` is compiled with `-DFFTVM_IMPL=1` to trigger the implementation blocks inside `libfftvm.cpp`. Note that for **Developer Installs**, we always use a standard install (`pip install .`) rather than editable mode to ensure the compiled shared library is correctly placed within the package directory for discovery.
+<details>
+<summary><b>1. The Node Proxy Pattern (Object vs. Impl)</b></summary>
+
+To allow Python subclassing while maintaining C++ thread performance, FFTVM uses a two-tier architecture for every node:
+- **The Proxy (`tvm::ffi::Object`)**: This is what Python "sees." It manages the lifecycle and holds references to the TVM functions (`svc`, `svc_init`). It inherits from [tvm::ffi::Object](https://github.com/apache/tvm/blob/main/include/tvm/ffi/object.h).
+- **The Implementation (`ff::ff_node`)**: An internal C++ struct (e.g., `SiSoNodeImpl`) that inherits from FastFlow's [ff_node](https://github.com/fastflow/fastflow/blob/master/ff/node.hpp). It lives inside a `std::unique_ptr` within the Proxy.
+
+**The Trick**: When FastFlow starts a thread, it calls the `svc()` method of the **Implementation**. This C++ method then "reaches back" into the **Proxy** to invoke the TVM function (which might be a Python method). This separation ensures that the physical thread state is decoupled from the TVM reference-counting logic.
+</details>
+
+<details>
+<summary><b>2. Memory Management (`Any` Containers)</b></summary>
+
+FastFlow queues pass `void*` pointers. Since [tvm::ffi::Any](https://github.com/apache/tvm/blob/main/include/tvm/ffi/any.h) is a stack-allocated container, we must wrap it in heap-allocated containers to pass it between threads. To avoid the OS memory allocator bottleneck, we use FastFlow's lock-free [ff_allocator](https://github.com/fastflow/fastflow/blob/master/ff/allocator.hpp):
+
+```cpp
+static inline tvm::ffi::Any* ff_alloc_any(tvm::ffi::Any&& from) {
+    // Uses ff::FFAllocator for high-frequency allocation
+    void* anyptr_raw = ff::FFAllocator::instance()->malloc(sizeof(tvm::ffi::Any));
+    return new (anyptr_raw) tvm::ffi::Any(std::move(from));
+}
+```
+</details>
+
+<details>
+<summary><b>3. Control Token Pointer Hacks (The `FFToken` Trick)</b></summary>
+
+FastFlow uses special address constants (like `(void*)ULLONG_MAX`) for control signals like `EOS`. Since FFTVM is typed to return `Any*`, we reinterpret the `FFToken::key` back into a raw pointer:
+
+```cpp
+// Unsafe reinterpret: The token key (uintptr_t) becomes the raw pointer address
+Any* tkn = reinterpret_cast<Any *>(r.cast<FFToken_ref>()->key); 
+return tkn;
+```
+This allows the Python `return ff.FFToken.EOS()` to be converted back into the low-level signal FastFlow expects.
+</details>
+
+<details>
+<summary><b>4. Technical Source Links</b></summary>
+
+- **TVM FFI Core**: [apache/tvm-ffi](https://github.com/apache/tvm-ffi)
+    - [any.h](https://github.com/apache/tvm-ffi/blob/main/include/tvm/ffi/any.h) (Type-erased container)
+    - [object.h](https://github.com/apache/tvm-ffi/blob/main/include/tvm/ffi/object.h) (Reference-counted base)
+- **FastFlow Core**: [fastflow/fastflow](https://github.com/fastflow/fastflow)
+    - [node.hpp](https://github.com/fastflow/fastflow/blob/master/ff/node.hpp) (Base execution unit)
+    - [allocator.hpp](https://github.com/fastflow/fastflow/blob/master/ff/allocator.hpp) (Lock-free memory)
+- **FFTVM Source**: [src/libfftvm.cpp](./src/libfftvm.cpp)
+</details>
+
+### Part D: The TVM Runtime & Execution Model (Research Deep-Dive)
+
+FFTVM's ultimate research goal is the structural fusion of parallel dataflows with TVM's internal execution path. This requires a granular understanding of how TVM lowers and executes code.
+
+<details>
+<summary><b>1. IR Trajectory: From Functional Graphs to Machine Code</b></summary>
+
+TVM uses a multi-stage lowering process, each governed by a set of [Transform Passes](https://github.com/apache/tvm/tree/main/src/relax/transform):
+- **Relax IR ([functional_ir.h](https://github.com/apache/tvm/blob/main/include/tvm/relax/expr.h))**: A dataflow-centric IR that supports symbolic shapes and dynamic control flow. During compilation, the [Relax-to-TIR lowering](https://github.com/apache/tvm/blob/main/src/relax/transform/realize_vdevice.cc) pass identifies high-level operators and maps them to low-level loop kernels.
+- **TIR ([op.h](https://github.com/apache/tvm/blob/main/include/tvm/tir/op.h))**: A representation of multi-dimensional loops and memory buffers. TIR is where [Schedule](https://github.com/apache/tvm/blob/main/include/tvm/tir/schedule/schedule.h) primitives (Split, Fuse, Vectorize) are applied to optimize for specific instruction sets (AVX-512, Tensor Cores).
+- **Codegen**: The [LLVM backend](https://github.com/apache/tvm/tree/main/src/target/llvm) or specialized backends (CUDA, OpenCL) translate TIR into target modules. The output is a [runtime::Module](https://github.com/apache/tvm/blob/main/include/tvm/runtime/module.h) containing `PackedFuncs`.
+</details>
+
+<details>
+<summary><b>2. Relax VM Architecture: Bytecode & Frames</b></summary>
+
+The [Relax Virtual Machine](https://github.com/apache/tvm/blob/main/include/tvm/runtime/relax_vm/vm.h) is a register-based executor for compiled Relax modules.
+- **The Executable ([executable.h](https://github.com/apache/tvm/blob/main/include/tvm/runtime/relax_vm/executable.h))**: Contains the [Bytecode](https://github.com/apache/tvm/blob/main/include/tvm/runtime/relax_vm/bytecode.h) instructions (e.g., `Call`, `Ret`, `Goto`) and a constant pool.
+- **VMFrame**: For every function call, the VM pushes a frame that manages local registers. Each register is a `tvm::ffi::Any` container, holding an [ObjectRef](https://github.com/apache/tvm/blob/main/include/tvm/ffi/object.h).
+- **Execution Loop**: The VM iterates through bytecode, dispatching `Call` instructions to the underlying `PackedFuncs` compiled from TIR or provided by the [External Registry](https://github.com/apache/tvm/blob/main/include/tvm/runtime/registry.h).
+</details>
+
+<details>
+<summary><b>3. Memory System: Storage & NDArray</b></summary>
+
+TVM's memory model is designed for zero-copy efficiency across language boundaries.
+- **StorageObj ([storage.h](https://github.com/apache/tvm/blob/main/include/tvm/runtime/relax_vm/storage.h))**: Represents a raw allocation on a specific device. It acts as the physical memory container.
+- **NDArray ([ndarray.h](https://github.com/apache/tvm/blob/main/include/tvm/runtime/ndarray.h))**: A view into a `StorageObj` with specific shape, data type, and strides.
+- **Reference Counting**: All memory is reference-counted via the `Object` base class. In FFTVM, when an `NDArray` is passed between nodes, only the pointer is shared, and the internal `AtomicRefCount` is updated, preventing copies.
+- **DeviceAPI ([device_api.h](https://github.com/apache/tvm/blob/main/include/tvm/runtime/device_api.h))**: The abstraction layer for allocating and copying memory on CPU, GPU, etc.
+</details>
+
+<details>
+<summary><b>4. The Shared ThreadPool Bottleneck (Research Limitation)</b></summary>
+
+A critical area for research is the interaction between FastFlow threads and TVM's [Internal Threading Backend](https://github.com/apache/tvm/blob/main/src/runtime/threading_backend.cc).
+- **Global Pool**: TVM initializes a single, shared `ThreadPool` per process. When a TIR kernel executes a parallel loop (e.g., via OpenMP or TVM's native pool), it dispatches work to this global set of threads.
+- **Conflict with FFTVM**: In FFTVM, each node runs on its own dedicated OS thread (managed by FastFlow). If multiple nodes call TVM kernels simultaneously, they all attempt to use the **same shared pool**, leading to context-switching overhead and cache trashing.
+- **Future Integration Goals**:
+    - **NUMA-Aware Partitioning**: Extending the [DeviceAPI](https://github.com/apache/tvm/blob/main/include/tvm/runtime/device_api.h) to allow the creation of "Partitioned CPU Devices" that only use specific core sets (via `pthread_setaffinity_np`).
+    - **Memory Placement**: Aligning FastFlow's [ff_allocator](https://github.com/fastflow/fastflow/blob/master/ff/allocator.hpp) with TVM's `StorageObj` to ensure data resides in the same NUMA node as the worker thread.
+    - **Scheduler Fusion**: Bridging FastFlow's lock-free queues with TVM's work-stealing logic to enable true fine-grained hardware orchestration.
+</details>
 
 ---
 
 ## Future Roadmap: Distributed Systems
 While current versions focus on shared-memory multi-core systems, future releases of the underlying FastFlow engine aim to support **distributed execution**, enabling FFTVM graphs to span multiple physical machines while maintaining the same Python-centric API.
+I.
