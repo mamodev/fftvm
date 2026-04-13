@@ -17,10 +17,10 @@ FFTVM is a high-performance bridging library that integrates the **FastFlow** C+
     - [The "Building Blocks" Philosophy](#the-building-blocks-philosophy)
     - [The Node Lifecycle](#the-node-lifecycle)
     - [Task Routing & Tokens](#task-routing--tokens)
-    - [Parallel Topologies (Coordination Blocks)](#parallel-topologies-coordination-blocks)
+    - [Creating a Node](#creating-a-node)
+    - [Composing Topologies](#composing-topologies)
 - [Showcase: Heterogeneous AI Workflow](#showcase-heterogeneous-ai-workflow)
     - [Real-World Use Case: Parallelized Object Detection](#real-world-use-case-parallelized-object-detection)
-    - [Native C++ Functions (FFI Inline)](#native-c-functions-ffi-inline)
 - [Developer Section (Under the Hood)](#developer-section-under-the-hood)
     - [Part A: Architecture & Memory Model](#part-a-architecture--memory-model)
     - [Part B: The tvm_ffi Registration Pattern (The Bridge)](#part-b-the-tvm_ffi-registration-pattern-the-bridge)
@@ -106,10 +106,47 @@ These are the basic processing units defined by their connectivity:
 - **`MiMoNode`**: Multiple Input, Multiple Output.
 
 #### 2. Parallel Patterns (Topologies)
-In FastFlow, parallel skeletons are themselves building blocks that can be nested and composed:
+In FastFlow, coordination patterns are themselves building blocks that can be nested and composed:
+
+```mermaid
+graph LR
+    subgraph Pipeline
+    direction LR
+    P1[Stage 1] --> P2[Stage 2] --> P3[Stage 3]
+    end
+```
+
+```mermaid
+graph LR
+    subgraph Farm
+    direction LR
+    Scatter[Emitter] --> W1[Worker]
+    Scatter --> W2[Worker]
+    Scatter --> W3[Worker]
+    W1 --> Gather[Collector]
+    W2 --> Gather
+    W3 --> Gather
+    end
+```
+
+```mermaid
+graph LR
+    subgraph A2A
+    direction LR
+    S1A[Set A: 1] --- S1B[Set B: 1]
+    S1A --- S2B[Set B: 2]
+    S2A[Set A: 2] --- S1B
+    S2A --- S2B
+    end
+```
+
 - **`Pipeline()`**: A linear sequence of stages.
 - **`Farm()`**: A master-worker pattern for data parallelism.
 - **`A2A()`**: An All-to-All pattern for many-to-many communication.
+
+**⚠️ Crucial Rule**: When providing a list of workers to a Farm or A2A, you *must* instantiate independent objects. Do not multiply a single instance.
+*Correct*: `[MyWorker() for _ in range(5)]`
+*Wrong*: `[worker_instance] * 5`
 
 By decoupling the **Calculation Logic** (inside nodes) from the **Topology** (the coordination block), developers can build complex, scalable architectures through simple composition.
 
@@ -127,44 +164,153 @@ Control the flow of data using these methods and tokens:
 - `return ff.FFToken.EOS()`: Signal that the stream has ended.
 - `return ff.FFToken.GO_ON()`: Signal that the node has processed the task but has no output to return.
 
-### Parallel Topologies (Coordination Blocks)
-In FastFlow, coordination patterns are themselves building blocks that can be nested and composed:
+### Creating a Node
+FFTVM provides multiple ways to define the logic of a node, ranging from simple Python functions to native-speed compiled modules.
 
-```mermaid
-graph LR
-    subgraph Pipeline
-    direction LR
-    P1[ ] --> P2[ ] --> P3[ ]
-    end
+<details>
+<summary><b>Example of Functional Node (Lambda)</b></summary>
+
+Pass any Python callable directly to the constructor for lightweight, stateless processing.
+```python
+node = ff.SiSoNode(lambda x: x * x)
 ```
+</details>
 
-```mermaid
-graph LR
-    subgraph Farm
-    direction LR
-    Scatter[ ] --> W1[ ]
-    Scatter --> W2[ ]
-    Scatter --> W3[ ]
-    W1 --> Gather[ ]
-    W2 --> Gather
-    W3 --> Gather
-    end
+<details>
+<summary><b>Stateful Nodes (Subclassing)</b></summary>
+
+Ideal for nodes that need initialization or internal state management across multiple tasks.
+```python
+class MyCounter(ff.SiSoNode):
+    def svc_init(self):
+        self.count = 0
+        return 0 # Success
+    def svc(self, task):
+        self.count += 1
+        return self.count
 ```
+</details>
 
-```mermaid
-graph LR
-    subgraph A2A
-    direction LR
-    S1A[ ] --- S1B[ ]
-    S1A --- S2B[ ]
-    S2A[ ] --- S1B
-    S2A --- S2B
-    end
+<details>
+<summary><b>TVM Registry Native Functions / Modules</b></summary>
+
+Use pre-registered TVM `PackedFuncs` or modules for maximum performance and ecosystem integration.
+```python
+import tvm
+node = ff.SiSoNode(tvm.get_global_func("my_native_op"))
 ```
+</details>
 
-**⚠️ Crucial Rule**: When providing a list of workers to a Farm or A2A, you *must* instantiate independent objects. Do not multiply a single instance.
-*Correct*: `[MyWorker() for _ in range(5)]`
-*Wrong*: `[worker_instance] * 5`
+<details>
+<summary><b>Native C++ Function (FFI Inline)</b></summary>
+
+Compile and load C++ code directly into a GIL-free node for maximum performance without pre-compiling shared libraries. These functions are executed **outside the GIL**.
+```python
+import fftvm as ff
+import tvm_ffi
+
+cpp_source = '''
+#include <tvm/ffi/any.h>
+tvm::ffi::Any add_one(tvm::ffi::Any input) {
+    if (input.type_index() == 0) return tvm::ffi::Any(); 
+    int val = input.cast<int>();
+    return val + 1; 
+}
+'''
+
+native_mod = tvm_ffi.cpp.load_inline("my_ops", cpp_source, ["add_one"])
+node = ff.SiSoNode(native_mod.add_one) # Direct native execution
+```
+</details>
+
+<details>
+<summary><b>Using TVM Scripting to produce Native Functions (TIR)</b></summary>
+
+Execute low-level TVM Tensor IR (TIR) kernels directly as parallel stages.
+```python
+from tvm.script import tir as T
+@tvm.script.ir_module
+class MyKernel:
+    @T.prim_func
+    def main(a: T.handle, b: T.handle): 
+        # ... TIR implementation ...
+rt_mod = tvm.build(MyKernel, target="llvm")
+node = ff.SiSoNode(rt_mod["main"])
+```
+</details>
+
+<details>
+<summary><b>TVM Relax Modules</b></summary>
+
+The standard way to run end-to-end deep learning models GIL-free using the TVM Virtual Machine.
+```python
+vm = relax.VirtualMachine(ex, tvm.cpu())
+node = ff.SiSoNode(vm["main"])
+```
+</details>
+
+### Composing Topologies
+Topologies are building blocks that coordinate data flow between nodes.
+
+<details>
+<summary><b>Pipeline</b></summary>
+
+A linear chain of processing stages.
+```python
+pipe = ff.Pipeline().add_stage(N1).add_stage(N2)
+```
+</details>
+
+<details>
+<summary><b>Farm</b></summary>
+
+A master-worker pattern for data parallelism, distributing tasks to a pool of workers.
+```python
+farm = ff.Farm().add_emitter(E).add_workers([W1, W2]).add_collector(C)
+```
+</details>
+
+<details>
+<summary><b>Collapsed Farm</b></summary>
+
+Coordination logic is "collapsed" into the surrounding Pipeline stages, where the upstream stage scatters and the downstream stage gathers.
+```python
+# Stage 1 (SiMo) scatters, Stage 3 (MiSo) gathers
+workflow = ff.Pipeline().add_stage(S1).add_stage(ff.Farm().add_workers([W1, W2])).add_stage(S3)
+```
+</details>
+
+<details>
+<summary><b>All-to-All (A2A)</b></summary>
+
+Connect a set of producers to a set of consumers in a many-to-many communication pattern.
+```python
+a2a = ff.A2A().add_firstset([P1, P2]).add_secondset([C1, C2])
+```
+</details>
+
+<details>
+<summary><b>Composing & Nesting</b></summary>
+
+Topologies are building blocks themselves and can be nested to create complex hierarchies.
+```python
+# A Farm inside a Pipeline stage
+nested = ff.Pipeline().add_stage(ff.Farm().add_workers([...])).add_stage(S2)
+```
+</details>
+
+<details>
+<summary><b>Feedback Channels (`wrap_around`)</b></summary>
+
+Create cycles in the graph (feedback channels) for iterative algorithms or recursive processing.
+```python
+# Feed output of N2 back to input of N1
+pipe = ff.Pipeline().add_stage(N1).add_stage(N2).wrap_around()
+
+# Feedback within a Farm (Collector back to Emitter)
+farm = ff.Farm().add_emitter(E).add_workers([...]).add_collector(C).wrap_around()
+```
+</details>
 
 ---
 
@@ -173,14 +319,14 @@ This example demonstrates a **Collapsed Farm** where the generator and post-proc
 
 ```mermaid
 graph LR
-    G[ ] --> F{ }
+    G[Data Gen] --> F{Farm}
     subgraph Workers
-    F --> W1[ ]
-    F --> W2[ ]
-    F --> W3[ ]
-    F --> W4[ ]
+    F --> W1[Inference 1]
+    F --> W2[Inference 2]
+    F --> W3[Inference 3]
+    F --> W4[Inference 4]
     end
-    W1 --> P[ ]
+    W1 --> P[Post-Proc]
     W2 --> P
     W3 --> P
     W4 --> P
@@ -215,9 +361,9 @@ By using a `SiMo` node for the loader and a `MiSo` node for the visualizer, the 
 
 ```mermaid
 graph LR
-    L[ ] --> W1[ ]
-    L --> W2[ ]
-    W1 --> V[ ]
+    L[Image Loader] --> W1[YOLO Worker]
+    L --> W2[YOLO Worker]
+    W1 --> V[Visualizer]
     W2 --> V
 ```
 
@@ -243,43 +389,8 @@ pipeline = (
 pipeline.run_and_wait_end()
 ```
 
-### Native C++ Functions (FFI Inline)
-For maximum performance without the need for pre-compiled shared libraries, you can use the TVM FFI to load C++ source code directly. These functions are executed **without the GIL**, achieving native speed for compute-intensive tasks.
-
-```python
-import fftvm as ff
-import tvm_ffi
-
-# 1. Define C++ source for a high-performance stage
-cpp_source = '''
-#include <tvm/ffi/any.h>
-tvm::ffi::Any add_one(tvm::ffi::Any input) {
-    if (input.type_index() == 0) return tvm::ffi::Any(); 
-    int val = input.cast<int>();
-    return val + 1; 
-}
-'''
-
-# 2. Compile and load inline using TVM FFI
-native_mod = tvm_ffi.cpp.load_inline(
-    name="my_native_ops", 
-    cpp_sources=cpp_source, 
-    functions=['add_one']
-)
-
-# 3. Use the native function directly in a Node
-workflow = (
-    ff.Pipeline()
-    .add_stage(MyGenerator())
-    .add_stage(ff.SiSoNode(native_mod.add_one)) # Native FFI call
-    .add_stage(MySink())
-)
-workflow.run_and_wait_end()
-```
-
----
-
-## Developer Section (Under the Hood)
+### Showcase: Heterogeneous AI Workflow
+This example demonstrates a **Collapsed Farm** where the generator and post-processor handle the parallel coordination.
 
 This section details the internal architecture for advanced users and contributors.
 
