@@ -1,6 +1,10 @@
 # FFTVM: High-Performance Parallel Execution Engine for the TVM Ecosystem
 
-FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It provides a Python-friendly API to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
+<p align="center">
+  <img src="logo.png" width="300" alt="FFTVM Logo">
+</p>
+
+FFTVM is a high-performance bridging library that integrates the **FastFlow** C++ parallel runtime with the **TVM FFI** (Foreign Function Interface). It enables developers to construct complex, lockless, native-speed parallel dataflow graphs specifically optimized for AI/ML inference and heterogeneous hardware orchestration.
 
 ## 📑 Table of Contents
 - [📖 External Documentation](#external-documentation)
