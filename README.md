@@ -19,8 +19,9 @@ FFTVM is a high-performance bridging library that integrates the **FastFlow** C+
     - [Task Routing & Tokens](#task-routing--tokens)
     - [Creating a Node](#creating-a-node)
     - [Composing Topologies](#composing-topologies)
-- [Showcase: Heterogeneous AI Workflow](#showcase-heterogeneous-ai-workflow)
-    - [Real-World Use Case: Parallelized Object Detection](#real-world-use-case-parallelized-object-detection)
+- [Showcase: Advanced Parallel Workflows](#showcase-advanced-parallel-workflows)
+    - [The "Grand Tour": Hierarchical Traffic Orchestration Engine](#the-grand-tour-hierarchical-traffic-orchestration-engine)
+    - [Specialized Examples](#specialized-examples)
 - [Developer Section (Under the Hood)](#developer-section-under-the-hood)
     - [Part A: Architecture & Memory Model](#part-a-architecture--memory-model)
     - [Part B: The tvm_ffi Registration Pattern (The Bridge)](#part-b-the-tvm_ffi-registration-pattern-the-bridge)
@@ -144,10 +145,6 @@ graph LR
 - **`Farm()`**: A master-worker pattern for data parallelism.
 - **`A2A()`**: An All-to-All pattern for many-to-many communication.
 
-**⚠️ Crucial Rule**: When providing a list of workers to a Farm or A2A, you *must* instantiate independent objects. Do not multiply a single instance.
-*Correct*: `[MyWorker() for _ in range(5)]`
-*Wrong*: `[worker_instance] * 5`
-
 By decoupling the **Calculation Logic** (inside nodes) from the **Topology** (the coordination block), developers can build complex, scalable architectures through simple composition.
 
 ### The Node Lifecycle
@@ -265,6 +262,11 @@ pipe = ff.Pipeline().add_stage(N1).add_stage(N2)
 <summary><b>Farm</b></summary>
 
 A master-worker pattern for data parallelism, distributing tasks to a pool of workers.
+
+**⚠️ Crucial Rule**: When providing a list of workers to a Farm, you *must* instantiate independent objects. Do not multiply a single instance.
+*Correct*: `[MyWorker() for _ in range(5)]`
+*Wrong*: `[worker_instance] * 5`
+
 ```python
 farm = ff.Farm().add_emitter(E).add_workers([W1, W2]).add_collector(C)
 ```
@@ -314,83 +316,172 @@ farm = ff.Farm().add_emitter(E).add_workers([...]).add_collector(C).wrap_around(
 
 ---
 
-## Showcase: Heterogeneous AI Workflow
-This example demonstrates a **Collapsed Farm** where the generator and post-processor handle the parallel coordination.
+## Showcase: Advanced Parallel Workflows
+
+This section demonstrates how FFTVM builds complex, heterogeneous systems that overlap I/O, C++ compute, and multi-accelerator inference entirely outside the GIL.
+
+### The "Grand Tour": Hierarchical Traffic Orchestration Engine
+This master workflow demonstrates a production-grade engine for city-scale analytics. It features a **Pipeline** containing a **Farm**, where each worker is itself a **Nested Pipeline** utilizing **Feedback Loops** for temporal object tracking.
 
 ```mermaid
 graph LR
-    G[Data Gen] --> F{Farm}
-    subgraph Workers
-    F --> W1[Inference 1]
-    F --> W2[Inference 2]
-    F --> W3[Inference 3]
-    F --> W4[Inference 4]
+    subgraph CityOrchestrator [Traffic Analytics Engine]
+    direction LR
+    Loader[SiMo: 4K Stream Loader] --> F{Spatial Farm}
+    
+    subgraph ParallelWorkers [Inference Workers x8]
+    direction LR
+    F --> W_Pipe((Pipeline))
+    subgraph W_Pipe [Recursive Tracking Pipeline]
+    direction LR
+    Pre[FFI: Native Pre-proc] --> Det[Relax: YOLO detection]
+    Det --> Track[TIR: Temporal Tracker]
+    Track -- Feedback Loop --o Pre
     end
-    W1 --> P[Post-Proc]
-    W2 --> P
-    W3 --> P
-    W4 --> P
+    end
+    
+    W_Pipe --> Agg[MiSo: Scene Reconstructor]
+    end
 ```
 
 ```python
 import fftvm as ff
 import tvm
 from tvm import relax
-import numpy as np
 
-# 1. Load a pre-compiled TVM model (Native FFI)
-net = tvm.runtime.load_module("model.so")
+# 1. Component Definition (Heterogeneous Construction)
+pre_proc_native = tvm_ffi.cpp.load_inline("preproc", cpp_src, ["preprocess"])
+yolo_model = tvm.runtime.load_module("yolo_relax.so")
+tracker_kernel = tvm.build(tracker_tir_mod, target="llvm")["main"]
 
-# 2. Define a Pipeline with a Collapsed Farm
-p = (
+class SceneAggregator(ff.MiSoNode):
+    """Global stateful gatherer combining spatial data into a world map."""
+    def svc_init(self): 
+        self.world_map = {}
+        return 0
+    def svc(self, local_detection):
+        self.world_map.update(local_detection)
+        return self.world_map
+
+# 2. Build the Recursive Worker (A Pipeline with a Feedback Channel)
+def make_tracking_worker():
+    return (ff.Pipeline()
+            .add_stage(ff.SiSoNode(pre_proc_native.preprocess))
+            .add_stage(ff.SiSoNode(yolo_model))
+            .add_stage(ff.SiSoNode(tracker_kernel))
+            .wrap_around()) # Feed track state back to pre-processor
+
+# 3. Assemble the Master Engine
+orchestrator = (
     ff.Pipeline()
-    .add_stage(ff.SiMoNode(data_generator))       # Scatterer: Logic handles distribution
+    .add_stage(StreamLoader_SiMo())               # Phase 1: Overlapped I/O
     .add_stage(
         ff.Farm().add_workers([
-            ff.SiSoNode(net) for _ in range(4)    # Workers: Native TVM nodes
+            make_tracking_worker() for _ in range(8) # Phase 2: Parallelized recursive pipelines
         ])
     )
-    .add_stage(ff.MiSoNode(post_processing_fn))   # Gatherer: Logic handles collection
+    .add_stage(SceneAggregator())                # Phase 3: Global Scene Fusion
 )
 
-p.run_and_wait_end()
+orchestrator.run_and_wait_end()
 ```
 
-### Real-World Use Case: Parallelized Object Detection
-By using a `SiMo` node for the loader and a `MiSo` node for the visualizer, the Farm's parallel coordination is completely transparent.
+---
 
-```mermaid
-graph LR
-    L[Image Loader] --> W1[YOLO Worker]
-    L --> W2[YOLO Worker]
-    W1 --> V[Visualizer]
-    W2 --> V
-```
+<details>
+<summary><b>🤖 Multi-Model Heterogeneous Ensemble (Pipeline of Farms)</b></summary>
+
+This example shows a complex AI system where images are processed by a Backbone model (on GPU) and then classified by multiple Head models (on NPU) in parallel.
 
 ```python
 import fftvm as ff
 import tvm
+from tvm import relax
 
-# Load compiled model
-model_mod = tvm.runtime.load_module("yolo_relax.so")
+# Load two different compiled Relax modules
+backbone_vm = relax.VirtualMachine(tvm.runtime.load_module("resnet50.so"), tvm.cuda())
+head_vm = relax.VirtualMachine(tvm.runtime.load_module("classifier_head.so"), tvm.cpu())
 
-# Build the pipeline with collapsed coordination
-pipeline = (
+ensemble = (
     ff.Pipeline()
-    .add_stage(ImageLoader_SiMo())                # Scatterer
+    .add_stage(ImageLoader_SiMo())                # Scatter frames
     .add_stage(
         ff.Farm().add_workers([
-            ff.SiSoNode(model_mod) for _ in range(2)
+            ff.SiSoNode(backbone_vm["main"]) for _ in range(2) # Parallel Backbone
         ])
     )
-    .add_stage(ResultVisualizer_MiSo())           # Gatherer
+    .add_stage(
+        ff.Farm().add_workers([
+            ff.SiSoNode(head_vm["main"]) for _ in range(4)     # Parallel Heads
+        ])
+    )
+    .add_stage(ResultAggregator_MiSo())           # Gather results
 )
-
-pipeline.run_and_wait_end()
+ensemble.run_and_wait_end()
 ```
+</details>
 
-### Showcase: Heterogeneous AI Workflow
-This example demonstrates a **Collapsed Farm** where the generator and post-processor handle the parallel coordination.
+<details>
+<summary><b>⚡ High-Performance Pre-processing Fusion (TIR + Relax)</b></summary>
+
+Demonstrates mixing low-level **TVM Script (TIR)** kernels for custom tensor normalization with high-level **Relax** models. Both stages execute outside the GIL with zero-copy tensor passing.
+
+```python
+import fftvm as ff
+import tvm
+from tvm.script import tir as T
+
+# 1. Define a custom Normalization kernel in TIR
+@tvm.script.ir_module
+class MyNorm:
+    @T.prim_func
+    def main(A: T.handle, B: T.handle):
+        # ... optimized normalization logic ...
+        pass
+
+rt_norm = tvm.build(MyNorm, target="llvm")
+
+# 2. Build a pipeline where every stage is a Native FFI call
+native_pipeline = (
+    ff.Pipeline()
+    .add_stage(ff.SiSoNode(rt_norm["main"]))      # GIL-Free TIR Kernel
+    .add_stage(ff.SiSoNode(compiled_relax_vm))    # GIL-Free Relax Model
+    .add_stage(ff.SiSoNode(lambda x: x.numpy()))  # Python Finalizer
+)
+```
+</details>
+
+<details>
+<summary><b>🔄 Iterative Model Refinement (Active Learning / RL)</b></summary>
+
+Use `.wrap_around()` to implement iterative loops where a compiled model refines its own output (e.g., iterative mask refinement or RL rollout) without ever returning control to Python.
+
+```python
+import fftvm as ff
+
+class RefinementLoop(ff.SiSoNode):
+    def svc(self, tensor_state):
+        # Compiled TVM model refines the mask
+        refined_tensor = self.model(tensor_state)
+        
+        # Check if confidence is high enough
+        if refined_tensor.confidence > 0.95:
+            return ff.FFToken.EOS() # Exit loop
+        
+        return refined_tensor # Feed back for next iteration
+
+# The entire refinement loop executes at native speed
+iterative_engine = (
+    ff.Pipeline()
+    .add_stage(RefinementLoop(my_model))
+    .wrap_around()
+)
+```
+</details>
+
+---
+
+## Developer Section (Under the Hood)
 
 This section details the internal architecture for advanced users and contributors.
 
